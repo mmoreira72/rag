@@ -1,17 +1,17 @@
 """
 API HTTP do local-rag.
 
-Expõe o chat com RAG + skills via REST, com histórico de sessão persistido
-no PostgreSQL. Cada session_id é isolado — múltiplos usuários simultâneos
-não interferem entre si.
+Fluxo assíncrono com fila Redis:
+  POST /chat          → enfileira job, retorna job_id imediatamente
+  GET  /chat/status/{job_id} → retorna status e resposta quando pronto
+  DELETE /chat/{session_id}  → encerra/reseta uma sessão
+  GET  /health        → liveness check
+
+O processamento RAG + LLM acontece no worker (worker.py), não aqui.
+Isso serializa as chamadas ao LLM (GPU processa 1 por vez) sem bloquear a API.
 
 Uso:
     uvicorn api:app --host 0.0.0.0 --port 8000
-
-Endpoints:
-    POST /chat          — envia mensagem, recebe resposta
-    DELETE /chat/{id}   — encerra/reseta uma sessão
-    GET  /health        — liveness check
 """
 from contextlib import asynccontextmanager
 
@@ -19,10 +19,10 @@ from fastapi import FastAPI, Security, HTTPException, status
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
-from chat import ask
 from config import API_KEY
 from db import delete_session
 from embeddings import embed
+from job_queue import enqueue, get_job
 from reranker import _get_reranker
 
 _api_key_header = APIKeyHeader(name="X-API-Key")
@@ -38,7 +38,7 @@ def _require_api_key(key: str = Security(_api_key_header)) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Pré-carrega embedding model e reranker durante o startup do container.
-    # Sem isso o primeiro request demora ~40s enquanto os modelos carregam.
+    # O worker também faz isso — aqui é para o caso de a API precisar de embeddings futuramente.
     print("[startup] pré-carregando embedding model...", flush=True)
     embed(["warmup"])
     print("[startup] pré-carregando reranker...", flush=True)
@@ -50,36 +50,64 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="local-rag chat API", lifespan=lifespan)
 
 
+# ---------- schemas ----------
+
 class ChatRequest(BaseModel):
-    session_id: str = Field(..., description="ID único da conversa (ex: número de WhatsApp, user ID)")
+    session_id: str = Field(..., description="ID único da conversa")
     message: str = Field(..., min_length=1, description="Mensagem do usuário")
 
 
-class ChatResponse(BaseModel):
-    session_id: str
-    answer: str
+class ChatQueued(BaseModel):
+    job_id: str
+    status: str = "queued"
 
 
-@app.post("/chat", response_model=ChatResponse, dependencies=[Security(_require_api_key)])
+class JobStatus(BaseModel):
+    job_id: str
+    status: str           # queued | processing | done | error
+    answer: str = ""
+    error: str = ""
+
+
+# ---------- endpoints ----------
+
+@app.post("/chat", response_model=ChatQueued, status_code=202,
+          dependencies=[Security(_require_api_key)])
 def chat_endpoint(req: ChatRequest):
     """
-    Recebe uma mensagem do usuário e retorna a resposta do assistente.
+    Enfileira a mensagem e retorna imediatamente com o job_id.
 
-    O histórico da sessão é buscado e persistido automaticamente no Postgres.
-    Sessões expiram após 30 minutos de inatividade.
+    O frontend deve fazer polling em GET /chat/status/{job_id} até status=done.
+    HTTP 202 Accepted indica que o job foi aceito mas ainda não processado.
     """
-    answer = ask(req.session_id, req.message)
-    return ChatResponse(session_id=req.session_id, answer=answer)
+    job_id = enqueue(req.session_id, req.message)
+    return ChatQueued(job_id=job_id)
 
 
-@app.delete("/chat/{session_id}", status_code=204, dependencies=[Security(_require_api_key)])
+@app.get("/chat/status/{job_id}", response_model=JobStatus,
+         dependencies=[Security(_require_api_key)])
+def job_status(job_id: str):
+    """
+    Retorna o status do job e a resposta quando pronto.
+
+    Polling recomendado: a cada 1-2s até status=done ou status=error.
+    Jobs expiram após 1h — após isso retorna 404.
+    """
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job não encontrado ou expirado.")
+    return JobStatus(
+        job_id=job["job_id"],
+        status=job["status"],
+        answer=job.get("answer", ""),
+        error=job.get("error", ""),
+    )
+
+
+@app.delete("/chat/{session_id}", status_code=204,
+            dependencies=[Security(_require_api_key)])
 def reset_session(session_id: str):
-    """
-    Encerra/reseta uma sessão, apagando o histórico.
-
-    Útil quando o usuário digita 'reiniciar', 'novo atendimento', etc.
-    O canal (WhatsApp, web) deve chamar este endpoint nesses casos.
-    """
+    """Apaga o histórico da sessão. Chamar ao iniciar novo atendimento."""
     delete_session(session_id)
 
 

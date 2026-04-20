@@ -33,6 +33,9 @@ USE_RERANKER = os.getenv("USE_RERANKER", "1") == "1"
 # Gerar uma chave forte: python -c "import secrets; print(secrets.token_hex(32))"
 API_KEY = os.getenv("API_KEY", "")
 
+# Redis — fila de jobs entre API e worker.
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+
 # Postgres
 PG_DSN = os.getenv(
     "PG_DSN",

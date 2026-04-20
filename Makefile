@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down ollama-pull up-server up-gpu
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -35,12 +35,14 @@ help:
 	@echo "  make mcp-serve      sobe o servidor MCP (stdio) para clientes externos"
 	@echo "  make debug Q=\"...\"  inspeciona o retrieval para uma query"
 	@echo ""
-	@echo "  make api            builda e sobe a API HTTP em container (porta 8000)"
-	@echo "  make api-build      apenas (re)builda a imagem da API"
+	@echo "  make api            builda e sobe API + worker + Redis + Postgres"
+	@echo "  make api-build      apenas (re)builda a imagem"
 	@echo "  make api-logs       tail dos logs da API"
 	@echo "  make api-down       derruba só o container da API"
+	@echo "  make worker-logs    tail dos logs do worker"
+	@echo "  make worker-down    derruba só o container do worker"
 	@echo "  make ollama-pull    baixa o modelo no Ollama container (servidor)"
-	@echo "  make up-server      servidor Linux CPU: Postgres + Ollama + API em Docker"
+	@echo "  make up-server      servidor Linux CPU: stack completa com Ollama"
 	@echo "  make up-gpu         servidor Linux GPU: igual ao up-server + NVIDIA"
 	@echo ""
 	@echo "  make install        força resolução das dependências (uv)"
@@ -132,10 +134,11 @@ up-gpu:
 	docker compose -f docker-compose.yml -f docker-compose.server.yml -f docker-compose.gpu.yml up -d --build
 	@echo "Stack com GPU no ar. Rode 'make ollama-pull' se for a primeira vez."
 
-# ---------- api HTTP ----------
+# ---------- api HTTP + worker ----------
 api:
-	docker compose up -d --build api
+	docker compose up -d --build api worker
 	@echo "API em http://localhost:8000  (docs: http://localhost:8000/docs)"
+	@echo "Worker processando jobs em background."
 
 api-build:
 	docker compose build api
@@ -145,6 +148,12 @@ api-logs:
 
 api-down:
 	docker compose stop api && docker compose rm -f api
+
+worker-logs:
+	docker compose logs -f worker
+
+worker-down:
+	docker compose stop worker && docker compose rm -f worker
 
 # ---------- limpeza ----------
 clean:

@@ -17,6 +17,17 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: local-rag-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   api:
     build: .
     container_name: local-rag-api
@@ -25,13 +36,36 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       API_KEY: ${API_KEY:?API_KEY não definida. Exporte antes de subir o container.}
       PG_DSN: postgresql://rag:rag@db:5432/rag
-      # Mac: LM Studio via host (padrão). Servidor: sobrescrito pelo docker-compose.server.yml.
-      # Para usar Ollama nativo no Mac: export LLM_BASE_URL=http://host.docker.internal:11434/v1
+      REDIS_URL: redis://redis:6379
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
-      CHAT_MODEL: ${CHAT_MODEL:-gemma3:4b}
+      CHAT_MODEL: ${CHAT_MODEL:-google/gemma-3-4b}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - ./skills:/app/skills
+      - ./data:/app/data
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    restart: unless-stopped
+
+  worker:
+    build: .
+    container_name: local-rag-worker
+    command: python worker.py
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PG_DSN: postgresql://rag:rag@db:5432/rag
+      REDIS_URL: redis://redis:6379
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-google/gemma-3-4b}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:

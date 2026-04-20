@@ -1,5 +1,5 @@
 # Override para servidores Linux (CPU ou GPU).
-# Adiciona o Ollama como container e faz a API depender dele.
+# Adiciona o Ollama como container e faz API + worker dependerem dele.
 #
 # CPU:  docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
 # GPU:  docker compose -f docker-compose.yml -f docker-compose.server.yml -f docker-compose.gpu.yml up -d
@@ -21,6 +21,13 @@ services:
       start_period: 20s
 
   api:
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      LLM_BASE_URL: http://ollama:11434/v1
+
+  worker:
     depends_on:
       ollama:
         condition: service_healthy

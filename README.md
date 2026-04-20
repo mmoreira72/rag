@@ -1,10 +1,10 @@
 # local-rag
 
-RAG com skills em markdown, embeddings locais (BGE-M3) e chat via Ollama.
+RAG com skills em markdown, embeddings locais (BGE-M3) e chat via LM Studio / Ollama.
 
 Dois modos de uso:
 - **CLI** (`make chat`) — conversa local, histórico em memória, ideal para desenvolvimento.
-- **API HTTP** (`make api`) — serviço containerizado com histórico de sessão persistido no Postgres, pronto para integrar com WhatsApp, web ou qualquer canal externo.
+- **API HTTP** (`make api`) — serviço containerizado com fila Redis, worker assíncrono e histórico de sessão no Postgres, pronto para integrar com WhatsApp, web ou qualquer canal externo.
 
 ## Pré-requisitos
 
@@ -37,6 +37,18 @@ make api             # builda e sobe a API
 ```
 
 A API estará disponível em `http://localhost:8000`. Documentação interativa em `http://localhost:8000/docs`.
+
+### Arquitetura assíncrona
+
+O processamento RAG + LLM roda num **worker separado** — a GPU processa um job por vez sem bloquear a API. O frontend não fica preso esperando a resposta:
+
+```
+Web  →  POST /chat           →  { job_id }          (202, imediato)
+Web  →  GET /chat/status/id  →  { status: queued }   (polling)
+Web  →  GET /chat/status/id  →  { status: done, answer: "..." }
+```
+
+O worker consome a fila Redis em loop e executa RAG + LLM para cada job.
 
 > **Modelos HuggingFace (embeddings/reranker):** o container monta `~/.cache/huggingface` do host. Se os modelos ainda não foram baixados, rode `make chat` uma vez antes de subir a API — o CLI baixa automaticamente.
 
@@ -72,7 +84,7 @@ make api
 
 ### Contrato da API
 
-#### `POST /chat`
+#### `POST /chat` — enfileira mensagem
 
 ```http
 POST /chat
@@ -85,27 +97,48 @@ Content-Type: application/json
 }
 ```
 
-- `session_id` — ID único por conversa. Gerar no frontend com `crypto.randomUUID()`. Pode ser qualquer string: UUID, número de WhatsApp, ID de usuário.
+- `session_id` — ID único por conversa. Gerar no frontend com `crypto.randomUUID()`.
 - `message` — mensagem do usuário (não pode ser vazia).
 
-Resposta `200 OK`:
+Resposta `202 Accepted` (imediata):
 ```json
 {
-  "session_id": "string",
-  "answer":     "string"
+  "job_id": "uuid",
+  "status": "queued"
 }
 ```
 
-O histórico da sessão é mantido automaticamente no servidor (últimas 4 trocas). Sessões expiram após 30 minutos de inatividade.
+---
+
+#### `GET /chat/status/{job_id}` — consulta resultado
+
+Fazer polling a cada 1–2s até `status = done` ou `status = error`.
+
+```http
+GET /chat/status/550e8400-e29b-41d4-a716-446655440000
+X-API-Key: <chave>
+```
+
+Resposta `200 OK` (enquanto processa):
+```json
+{ "job_id": "...", "status": "processing", "answer": "", "error": "" }
+```
+
+Resposta `200 OK` (concluído):
+```json
+{ "job_id": "...", "status": "done", "answer": "Para verificar...", "error": "" }
+```
+
+Jobs expiram após 1h — após isso retorna `404`.
 
 ---
 
-#### `DELETE /chat/{session_id}`
+#### `DELETE /chat/{session_id}` — reseta sessão
 
-Apaga o histórico da sessão. Chamar quando o usuário iniciar um novo atendimento.
+Apaga o histórico da conversa. Chamar ao iniciar novo atendimento.
 
 ```http
-DELETE /chat/abc-123
+DELETE /chat/conv-001
 X-API-Key: <chave>
 ```
 
@@ -113,15 +146,8 @@ Resposta: `204 No Content`
 
 ---
 
-#### `GET /health`
+#### `GET /health` — sem autenticação
 
-Sem autenticação. Útil para load balancer / uptime check.
-
-```http
-GET /health
-```
-
-Resposta `200 OK`:
 ```json
 { "status": "ok" }
 ```
@@ -133,6 +159,7 @@ Resposta `200 OK`:
 | Código | Motivo |
 |---|---|
 | `401` | Header `X-API-Key` ausente ou inválido |
+| `404` | Job não encontrado ou expirado |
 | `422` | Body inválido (ex: `message` vazio) |
 | `500` | Erro interno do servidor |
 
@@ -141,24 +168,26 @@ Resposta `200 OK`:
 #### Exemplo completo (curl)
 
 ```bash
-# Primeira mensagem
-curl -X POST http://localhost:8000/chat \
+# 1. Enfileira a mensagem → recebe job_id imediatamente
+JOB=$(curl -s -X POST http://localhost:8000/chat \
   -H "X-API-Key: <chave>" \
   -H "Content-Type: application/json" \
-  -d '{"session_id": "conv-001", "message": "como faço para antecipar um boleto?"}'
+  -d '{"session_id": "conv-001", "message": "como faço para antecipar um boleto?"}')
+JOB_ID=$(echo $JOB | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
 
-# Resposta da skill (pede mais informações)
-# { "session_id": "conv-001", "answer": "Para verificar, preciso saber: ..." }
+# 2. Polling até done
+while true; do
+  STATUS=$(curl -s "http://localhost:8000/chat/status/$JOB_ID" -H "X-API-Key: <chave>")
+  STATE=$(echo $STATUS | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+  if [ "$STATE" = "done" ] || [ "$STATE" = "error" ]; then
+    echo $STATUS
+    break
+  fi
+  sleep 1
+done
 
-# Segunda mensagem — histórico mantido automaticamente
-curl -X POST http://localhost:8000/chat \
-  -H "X-API-Key: <chave>" \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "conv-001", "message": "quero antecipar para dia 20, fiz o resgate ontem"}'
-
-# Resetar sessão
-curl -X DELETE http://localhost:8000/chat/conv-001 \
-  -H "X-API-Key: <chave>"
+# 3. Resetar sessão
+curl -X DELETE http://localhost:8000/chat/conv-001 -H "X-API-Key: <chave>"
 ```
 
 ### Atualizar skills sem rebuild
@@ -192,10 +221,12 @@ make ingest-skills
 | `make ingest-user` | `convert-user` + `reindex` |
 | `make chat` | Abre o chat CLI |
 | `make debug Q="..."` | Mostra top skills/docs recuperados para uma query |
-| `make api` | Builda e sobe a API HTTP em container (porta 8000) |
-| `make api-build` | Apenas (re)builda a imagem da API |
+| `make api` | Builda e sobe API + worker + Redis |
+| `make api-build` | Apenas (re)builda a imagem |
 | `make api-logs` | Tail dos logs da API |
 | `make api-down` | Derruba só o container da API |
+| `make worker-logs` | Tail dos logs do worker |
+| `make worker-down` | Derruba só o container do worker |
 | `make ollama-pull` | Baixa o modelo de chat no Ollama (rodar após `make up`) |
 | `make up-gpu` | Sobe todos os serviços com suporte a GPU NVIDIA |
 | `make mcp-serve` | Sobe o servidor MCP (stdio) para clientes externos |
@@ -236,8 +267,9 @@ A `description` é o que vai para o embedding e decide o retrieval. **Encha de p
 ```
 local-rag/
 ├── Dockerfile
-├── docker-compose.yml       # db + ollama + api (CPU)
-├── docker-compose.gpu.yml   # override GPU para produção (Worldstream)
+├── docker-compose.yml        # db + redis + api + worker (Mac/dev)
+├── docker-compose.server.yml # adiciona Ollama container (Linux CPU)
+├── docker-compose.gpu.yml    # adiciona GPU NVIDIA ao Ollama (Worldstream)
 ├── Makefile
 ├── requirements.txt
 ├── data/                    # seus arquivos (código, notas)
@@ -252,8 +284,10 @@ local-rag/
     ├── reranker.py
     ├── ingest.py
     ├── ingest_skills.py
-    ├── chat.py              # CLI + função ask() usada pela API
-    ├── api.py               # API HTTP (FastAPI)
+    ├── chat.py              # CLI + função ask() usada pelo worker
+    ├── job_queue.py         # operações Redis (enqueue, dequeue, get_job)
+    ├── api.py               # API HTTP (FastAPI) — enfileira e consulta jobs
+    ├── worker.py            # worker — consome fila e executa RAG + LLM
     ├── mcp_server.py
     └── debug_retrieve.py
 ```
