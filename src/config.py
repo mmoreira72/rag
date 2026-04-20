@@ -15,7 +15,8 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 
 # Chat model — use o identifier exato do servidor:
 # LM Studio: nome que aparece em "My Models" (ex: "google/gemma-3-4b")
-# Ollama:    formato "gemma3:4b", "llama3.2:3b", etc.
+# Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
+# Produção (servidor GPU): qwen2.5:14b
 CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-3-4b")
 
 # Embedding model — roda em Python local via sentence-transformers.

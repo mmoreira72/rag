@@ -118,7 +118,8 @@ mcp-serve:
 
 # ---------- ollama ----------
 # MODEL pode ser sobrescrito: make ollama-pull MODEL=llama3.2:3b
-MODEL ?= gemma3:4b
+# Padrão de produção (servidor GPU): qwen2.5:14b
+MODEL ?= qwen2.5:14b
 
 ollama-pull:
 	docker exec local-rag-ollama ollama pull $(MODEL)
