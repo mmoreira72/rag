@@ -1,0 +1,19 @@
+# Override para servidores com GPU NVIDIA (ex: Worldstream).
+#
+# Uso:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Pré-requisitos no servidor:
+#   - Driver NVIDIA instalado (nvidia-smi deve funcionar)
+#   - NVIDIA Container Toolkit: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
+#     apt install nvidia-container-toolkit && systemctl restart docker
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

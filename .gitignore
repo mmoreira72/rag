@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Dados locais — não versionar
+pgdata/
+data/user/
+data/backup/
+
+# Cache de modelos HuggingFace
+*.cache/
+
+# Variáveis de ambiente
+.env
+.env.*
+
+# Arquivos convertidos (gerados pelo pipeline)
+data/**/.converted/
+
+# OS
+.DS_Store
