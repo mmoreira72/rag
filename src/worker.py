@@ -63,7 +63,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, shutdown)
 
     while running:
-        job_id = dequeue(timeout=5)
+        job_id = dequeue(timeout=1)
         if job_id:
             process(job_id)
 
