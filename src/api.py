@@ -13,7 +13,9 @@ Isso serializa as chamadas ao LLM (GPU processa 1 por vez) sem bloquear a API.
 Uso:
     uvicorn api:app --host 0.0.0.0 --port 8000
 """
+import json
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Security, HTTPException, status
 from fastapi.security import APIKeyHeader
@@ -66,6 +68,7 @@ class JobStatus(BaseModel):
     job_id: str
     status: str           # queued | processing | done | error
     answer: str = ""
+    sources: list[dict[str, Any]] = Field(default_factory=list)
     error: str = ""
 
 
@@ -96,10 +99,13 @@ def job_status(job_id: str):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job não encontrado ou expirado.")
+    raw_sources = job.get("sources", "")
+    sources = json.loads(raw_sources) if raw_sources else []
     return JobStatus(
         job_id=job["job_id"],
         status=job["status"],
         answer=job.get("answer", ""),
+        sources=sources,
         error=job.get("error", ""),
     )
 

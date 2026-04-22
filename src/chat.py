@@ -157,9 +157,13 @@ def _build_messages(question: str, history: list) -> tuple[list, bool]:
     return messages, grounded
 
 
-def ask(session_id: str, question: str) -> str:
+def ask(session_id: str, question: str) -> dict:
     """
     Interface pública para a API HTTP.
+
+    Retorna dict com:
+      - answer: resposta da LLM (ou "Não sei" quando sem contexto relevante)
+      - sources: lista de documentos/skills usados na resposta
 
     Busca o histórico da sessão no Postgres, chama a LLM com contexto RAG
     e persiste o histórico atualizado. Cada session_id é isolado — múltiplos
@@ -168,7 +172,22 @@ def ask(session_id: str, question: str) -> str:
     TTL da sessão: SESSION_TTL_MINUTES (default 30 min de inatividade).
     """
     history = get_session_history(session_id)
-    messages, _ = _build_messages(question, history)
+    context, docs, skills = build_context(question)
+    grounded = bool(skills) or bool(docs)
+
+    # Sem contexto relevante → resposta determinística, sem chamar o LLM.
+    if not grounded:
+        answer = "Não sei"
+        save_session_history(session_id, (history + [
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer},
+        ])[-4:])
+        return {"answer": answer, "sources": []}
+
+    system = _system_grounded(context)
+    messages = [{"role": "system", "content": system}] + history + [
+        {"role": "user", "content": question}
+    ]
 
     response = chat(messages, stream=False)
     answer = response.choices[0].message.content or ""
@@ -177,7 +196,14 @@ def ask(session_id: str, question: str) -> str:
     history.append({"role": "assistant", "content": answer})
     save_session_history(session_id, history[-4:])
 
-    return answer
+    sources = [
+        {"type": "skill", "name": name, "score": round(score, 4)}
+        for name, _desc, _body, score in skills
+    ] + [
+        {"type": "doc", "source": src, "chunk": idx, "score": round(score, 4)}
+        for src, idx, _content, score in docs
+    ]
+    return {"answer": answer, "sources": sources}
 
 
 def main():

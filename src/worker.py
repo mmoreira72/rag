@@ -14,6 +14,7 @@ Uso:
 Sinais:
     SIGTERM / SIGINT — encerra o loop após o job corrente terminar (graceful shutdown).
 """
+import json
 import signal
 import sys
 from datetime import datetime, timezone
@@ -32,14 +33,17 @@ def process(job_id: str) -> None:
     update_job(job_id, status="processing")
 
     try:
-        answer = ask(job["session_id"], job["message"])
+        result = ask(job["session_id"], job["message"])
+        answer = result["answer"]
+        sources = json.dumps(result["sources"], ensure_ascii=False)
         update_job(
             job_id,
             status="done",
             answer=answer,
+            sources=sources,
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
-        print(f"[worker] job {job_id} concluído ({len(answer)} chars)", flush=True)
+        print(f"[worker] job {job_id} concluído ({len(answer)} chars, {len(result['sources'])} fontes)", flush=True)
     except Exception as exc:
         update_job(
             job_id,

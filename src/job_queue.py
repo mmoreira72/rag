@@ -37,6 +37,7 @@ def enqueue(session_id: str, message: str) -> str:
         "message": message,
         "status": "queued",
         "answer": "",
+        "sources": "",
         "error": "",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": "",
