@@ -10,6 +10,11 @@ pgdata/
 data/user/
 data/backup/
 
+# Em produção data/ e skills/ são symlinks para o repo seliga-rag-content
+# Ignorar para o git não reclamar do conteúdo além dos symlinks
+data/
+skills/
+
 # Cache de modelos HuggingFace
 *.cache/
 
