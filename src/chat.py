@@ -27,7 +27,7 @@ from config import (
 # quando a pergunta era sobre queries pesadas; pontuou 0.500 quando era
 # "capital do brasil" (ruído → falso positivo com threshold antigo).
 SKILL_MIN_SCORE_RERANK = 0.65
-DOC_MIN_SCORE_RERANK = 0.50
+DOC_MIN_SCORE_RERANK = 0.55
 
 # Fallback: se reranker desligado, usa thresholds de cosine (escala diferente).
 SKILL_MIN_SCORE_COS = 0.65
