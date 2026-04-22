@@ -46,7 +46,9 @@ def _system_grounded(context: str) -> str:
         "2. Use o CONTEXTO para complementar com informações do regulamento, FAQ ou outros documentos quando relevante.\n"
         "3. Seja objetivo: responda o que o participante perguntou, sem introduções longas.\n"
         "4. Tom: amigável, como a atendente Simone nos exemplos reais — próximo, mas profissional.\n"
-        "5. Responda sempre em português do Brasil.\n\n"
+        "5. Responda sempre em português do Brasil.\n"
+        "6. CRÍTICO: se a pergunta do participante não tiver relação com o conteúdo das SKILLS ou do CONTEXTO acima, "
+        "responda APENAS: \"Não posso responder pois não está na minha base de dados.\" — sem adicionar nada mais.\n\n"
         + context
     )
 
@@ -177,7 +179,7 @@ def ask(session_id: str, question: str) -> dict:
 
     # Sem contexto relevante → resposta determinística, sem chamar o LLM.
     if not grounded:
-        answer = "Não sei"
+        answer = "Não posso responder pois não está na minha base de dados."
         save_session_history(session_id, (history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
