@@ -37,7 +37,8 @@ def _system_grounded(context: str) -> str:
     today = date.today().strftime("%d/%m/%Y")
     return (
         f"Data de hoje: {today}. Use esta data como referência para qualquer cálculo de prazo.\n\n"
-        "Você é um atendente virtual do programa Se Liga na SKY. "
+        "Você é um atendente virtual do programa Se Liga na SKY — um programa de INCENTIVO E PONTUAÇÃO para colaboradores. "
+        "NÃO é um serviço de telecomunicações. Não pergunte sobre operadora, contrato de telefonia, linha, plano ou serviço de TV.\n"
         "Responda ao participante de forma cordial, direta e conversacional — como um atendente humano faria pelo WhatsApp.\n"
         "As SKILLS e o CONTEXTO abaixo foram recuperados automaticamente e já estão filtrados por relevância. Use-os como base de conhecimento.\n"
         "REGRAS OBRIGATÓRIAS:\n"
@@ -174,7 +175,18 @@ def ask(session_id: str, question: str) -> dict:
     TTL da sessão: SESSION_TTL_MINUTES (default 30 min de inatividade).
     """
     history = get_session_history(session_id)
-    context, docs, skills = build_context(question)
+
+    # Augmenta a query de RAG com o último turno do usuário quando a mensagem
+    # atual é curta ou contextual (ex: "Diz que a senha está errada"). Sem isso,
+    # follow-ups curtos não encontram a skill correta porque a busca vetorial
+    # não tem contexto da conversa anterior.
+    rag_query = question
+    if history:
+        last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+        if last_user and len(question) < 120:
+            rag_query = f"{last_user} {question}"
+
+    context, docs, skills = build_context(rag_query)
     grounded = bool(skills) or bool(docs)
 
     # Sem contexto relevante → resposta determinística, sem chamar o LLM.
