@@ -176,14 +176,13 @@ def ask(session_id: str, question: str) -> dict:
     """
     history = get_session_history(session_id)
 
-    # Augmenta a query de RAG com o último turno do usuário quando a mensagem
-    # atual é curta ou contextual (ex: "Diz que a senha está errada"). Sem isso,
-    # follow-ups curtos não encontram a skill correta porque a busca vetorial
-    # não tem contexto da conversa anterior.
+    # Augmenta a query de RAG com a última mensagem do usuário no histórico.
+    # Follow-ups em WhatsApp são sempre curtos e contextuais ("Diz que a senha
+    # está errada") — sem o turno anterior a busca vetorial não encontra a skill.
     rag_query = question
     if history:
         last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
-        if last_user and len(question) < 120:
+        if last_user:
             rag_query = f"{last_user} {question}"
 
     context, docs, skills = build_context(rag_query)
