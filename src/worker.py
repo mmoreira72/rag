@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 
 from chat import ask
 from job_queue import dequeue, get_job, update_job
+from llm_client import warmup_llm_models
 
 
 def process(job_id: str) -> None:
@@ -55,6 +56,7 @@ def process(job_id: str) -> None:
 
 
 def main() -> None:
+    warmup_llm_models()
     print("[worker] iniciando — aguardando jobs...", flush=True)
     running = True
 
