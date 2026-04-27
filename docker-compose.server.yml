@@ -14,7 +14,7 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     environment:
-      OLLAMA_MAX_LOADED_MODELS: "2"   # mantém 2 modelos na VRAM simultaneamente
+      OLLAMA_MAX_LOADED_MODELS: "1"   # 1 modelo na VRAM — evita OOM durante ingest/embeddings
       OLLAMA_KEEP_ALIVE: "-1"         # nunca descarrega um modelo por inatividade
     healthcheck:
       test: ["CMD-SHELL", "ollama list || exit 1"]
