@@ -165,6 +165,7 @@ deploy:
 	@echo "Aguardando worker subir..."
 	@sleep 10
 	docker exec local-rag-worker python ingest_skills.py
+	docker exec local-rag-worker python convert_user_docs.py
 	docker exec local-rag-worker python ingest.py
 	docker exec local-rag-db psql -U rag -c "DELETE FROM sessions;"
 	@echo "Deploy concluído."
