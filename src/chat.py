@@ -190,7 +190,7 @@ def ask(session_id: str, question: str) -> dict:
 
     # Sem contexto relevante → resposta determinística, sem chamar o LLM.
     if not grounded:
-        answer = "Não posso responder pois não está na minha base de dados."
+        answer = "No momento, não encontrei informações disponíveis sobre esse tema na minha base de dados. Posso ajudar com outro assunto?"
         save_session_history(session_id, (history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
