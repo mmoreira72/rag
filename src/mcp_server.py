@@ -45,16 +45,18 @@ mcp = FastMCP("local-rag")
 @mcp.tool()
 def search_skills_tool(query: str, k: int = 3) -> str:
     """
-    Busca skills (runbooks pessoais do Marcelo) relevantes para a query.
+    Busca skills (runbooks e procedimentos do Marcelo) relevantes para a query.
 
-    Use esta tool SEMPRE que a pergunta envolver um procedimento técnico
-    que ele possa ter documentado: git, MySQL, GCP DMS, Jira updates,
-    ou qualquer fluxo recorrente de trabalho dele.
+    CHAMA ESTA TOOL ANTES DE RESPONDER sempre que a pergunta envolver:
+    - GCP: Cloud SQL, GKE, Pub/Sub, IAM, VPC, Cloud Run, Dataproc
+    - IaC: Terraform, Terragrunt, módulos, PR validation, plan/apply
+    - SRE: incidentes, SLOs, alertas, runbooks, on-call
+    - Git: branches, squash, PRs, conflitos
+    - Qualquer procedimento técnico recorrente do Marcelo
 
-    Retorna até `k` skills com nome, descrição, corpo em markdown e score.
-    O retrieval usa busca vetorial + reranking cross-encoder pra precisão.
-    Se nada passar do threshold, retorna mensagem indicando que nada
-    relevante foi encontrado — neste caso, NÃO invente um procedimento.
+    Retorna até `k` skills com conteúdo completo e score de confiança.
+    Se o score for insuficiente, lista candidatos e pede ao utilizador para escolher.
+    NÃO inventes procedimentos se a tool não devolver conteúdo confiante.
     """
     qvec = embed([query])[0]
     raw = search_skills(qvec, max(k, TOP_K_RETRIEVE_SKILLS))
@@ -78,8 +80,7 @@ def search_skills_tool(query: str, k: int = 3) -> str:
         parts = []
         for name, description, body, score in confident:
             parts.append(
-                f"### Skill: {name}  (score {score:.2f})\n"
-                f"_{description}_\n\n"
+                f"[skill: {name}]  _(score {score:.2f})_\n\n"
                 f"{body}"
             )
         return "\n\n---\n\n".join(parts)
