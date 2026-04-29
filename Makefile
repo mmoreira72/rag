@@ -147,6 +147,13 @@ local-mcp:
 	@echo "MCP server → localhost:5435 | skills: $(SKILLS_DIR)"
 	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" $(PY) mcp_server.py
 
+# ALERT: path para o JSON do alerta (default: sample)
+ALERT ?= $(CURDIR)/tests/fixtures/sample_alert.json
+
+local-incident:
+	@echo "Running incident graph with alert: $(ALERT)"
+	cd src && PG_DSN="$(LOCAL_PG)" $(PY) incident_graph.py --alert "$(ALERT)"
+
 # ---------- ollama ----------
 # MODEL pode ser sobrescrito: make ollama-pull MODEL=llama3.2:3b
 # Padrão de produção (servidor GPU): qwen2.5:14b

@@ -1,0 +1,23 @@
+{
+  "incident": {
+    "incident_id": "0.m4test123",
+    "resource_name": "projects/hw-prod-soc-mgmt-plat-77bb/services/payments-api",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "hw-prod-soc-mgmt-plat-77bb",
+        "service_name": "payments-api",
+        "location": "europe-west1"
+      }
+    },
+    "metric": {
+      "type": "run.googleapis.com/request_count",
+      "displayName": "Request count"
+    },
+    "started_at": 1746000000,
+    "ended_at": null,
+    "state": "open",
+    "condition_name": "Error rate > 5% for 5 minutes",
+    "url": "https://console.cloud.google.com/monitoring/alerting/incidents/0.m4test123?project=hw-prod-soc-mgmt-plat-77bb"
+  }
+}
