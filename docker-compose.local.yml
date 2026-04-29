@@ -1,0 +1,26 @@
+# pgvector isolado para cloudengineerskills (desenvolvimento local no Mac).
+# NÃO usa os dados de produção — pgdata-skills é um volume separado.
+#
+# Uso:
+#   docker compose -f docker-compose.local.yml up -d
+#
+# Porta 5435 (diferente da 5433 do servidor remoto).
+
+services:
+  db-skills:
+    image: pgvector/pgvector:pg16
+    container_name: skills-db
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag
+    ports:
+      - "5435:5432"
+    volumes:
+      - ./pgdata-skills:/var/lib/postgresql/data
+      - ./src/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

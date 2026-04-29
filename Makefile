@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy local-up local-down local-psql local-ingest-skills local-mcp local-reset-db
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -116,6 +116,36 @@ fetch-docs:
 # para clientes externos (Claude Desktop, Cursor, etc.)
 mcp-serve:
 	cd src && $(PY) mcp_server.py
+
+# ---------- local dev (cloudengineerskills, pgvector isolado na porta 5435) ----------
+# Variáveis sobrescrevíveis:
+#   SKILLS_DIR — path para o repo cloudengineerskills (default: ~/cloudengineerskills/skills)
+#   LOCAL_PG   — DSN do pgvector local
+SKILLS_DIR ?= $(HOME)/cloudengineerskills/skills
+LOCAL_PG   := postgresql://rag:rag@localhost:5435/rag
+
+local-up:
+	docker compose -f docker-compose.local.yml up -d
+	@echo "pgvector local em localhost:5435 (container: skills-db)"
+
+local-down:
+	docker compose -f docker-compose.local.yml down
+
+local-reset-db:
+	docker compose -f docker-compose.local.yml down -v
+	docker compose -f docker-compose.local.yml up -d
+	@echo "Schema recriado (pgdata-skills apagado)."
+
+local-psql:
+	docker exec -it skills-db psql -U rag -d rag
+
+local-ingest-skills:
+	@echo "Ingerindo skills de $(SKILLS_DIR) → localhost:5435"
+	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" HF_HUB_OFFLINE=0 $(PY) ingest_skills.py
+
+local-mcp:
+	@echo "MCP server → localhost:5435 | skills: $(SKILLS_DIR)"
+	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" $(PY) mcp_server.py
 
 # ---------- ollama ----------
 # MODEL pode ser sobrescrito: make ollama-pull MODEL=llama3.2:3b
