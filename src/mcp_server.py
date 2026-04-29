@@ -27,12 +27,17 @@ from config import (
 )
 
 # Thresholds pós-rerank (escala sigmoid 0-1).
-SKILL_MIN_SCORE_RERANK = 0.50
-DOC_MIN_SCORE_RERANK = 0.30
+# CONFIDENT  >= 0.70 → retorna a skill directamente
+# CANDIDATE  >= 0.45 → lista candidatos e pede ao utilizador para escolher
+# REJECTED   <  0.45 → não encontrou nada relevante
+SKILL_MIN_SCORE_RERANK = 0.70
+SKILL_CANDIDATE_SCORE  = 0.45
+DOC_MIN_SCORE_RERANK   = 0.30
 
 # Fallback se USE_RERANKER=0.
-SKILL_MIN_SCORE_COS = 0.65
-DOC_MIN_SCORE_COS = 0.40
+SKILL_MIN_SCORE_COS = 0.72
+SKILL_CANDIDATE_COS = 0.55
+DOC_MIN_SCORE_COS   = 0.40
 
 mcp = FastMCP("local-rag")
 
@@ -57,30 +62,44 @@ def search_skills_tool(query: str, k: int = 3) -> str:
     if USE_RERANKER and raw:
         skill_texts = [f"{s[0]}\n{s[1]}\n{s[2][:2000]}" for s in raw]
         ranked = rerank(query, skill_texts, top_k=k)
-        rows = []
+        confident, candidates = [], []
         for orig_idx, rscore in ranked:
-            if rscore < SKILL_MIN_SCORE_RERANK:
-                continue
             name, desc, body, _ = raw[orig_idx]
-            rows.append((name, desc, body, rscore))
+            if rscore >= SKILL_MIN_SCORE_RERANK:
+                confident.append((name, desc, body, rscore))
+            elif rscore >= SKILL_CANDIDATE_SCORE:
+                candidates.append((name, desc, rscore))
     else:
-        rows = [r for r in raw[:k] if r[3] >= SKILL_MIN_SCORE_COS]
+        all_rows = raw[:k]
+        confident  = [(n, d, b, s) for n, d, b, s in all_rows if s >= SKILL_MIN_SCORE_COS]
+        candidates = [(n, d, s)    for n, d, b, s in all_rows if SKILL_CANDIDATE_COS <= s < SKILL_MIN_SCORE_COS]
 
-    if not rows:
-        return (
-            "Nenhuma skill relevante encontrada no banco do Marcelo "
-            "para esta query. Não invente um procedimento — informe "
-            "que não há skill registrada e pergunte se ele quer criar uma."
-        )
+    if confident:
+        parts = []
+        for name, description, body, score in confident:
+            parts.append(
+                f"### Skill: {name}  (score {score:.2f})\n"
+                f"_{description}_\n\n"
+                f"{body}"
+            )
+        return "\n\n---\n\n".join(parts)
 
-    parts = []
-    for name, description, body, score in rows:
-        parts.append(
-            f"### Skill: {name}  (score {score:.2f})\n"
-            f"_{description}_\n\n"
-            f"{body}"
+    if candidates:
+        lines = [
+            "Confiança insuficiente para seleccionar a skill automaticamente.",
+            "Encontrei estas candidatas — qual delas é a mais relevante para a tua pergunta?\n",
+        ]
+        for i, (name, desc, score) in enumerate(candidates, 1):
+            lines.append(f"{i}. **{name}** (score {score:.2f}) — {desc}")
+        lines.append(
+            "\nResponde com o número ou o nome da skill e repetirei a busca com ela."
         )
-    return "\n\n---\n\n".join(parts)
+        return "\n".join(lines)
+
+    return (
+        "Nenhuma skill relevante encontrada para esta query. "
+        "Não invente um procedimento — pergunta ao utilizador se quer criar uma skill para este caso."
+    )
 
 
 @mcp.tool()
