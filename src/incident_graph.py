@@ -1,0 +1,401 @@
+"""
+Incident Response Graph — LangGraph skeleton.
+
+Workflow:
+  parse_alert
+      ↓
+  fetch_errors          (gcloud logging read ±30min)
+      ↓
+  check_release         (Cloud Deploy / Artifact Registry)
+      ├─ yes ──▶ fetch_release_logs ──▶ build_report
+      └─ no  ──────────────────────────▶ build_report
+                                              ↓
+                                     notify_and_wait   ← interrupt() aguarda engenheiro
+                                              ↓
+                                           decide       (rollback / escalate / close)
+
+Uso:
+    python src/incident_graph.py --alert alert.json
+
+Dependências adicionais (adicionar a requirements.txt):
+    langgraph>=0.2
+    langchain-openai>=0.1
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import TypedDict, Literal
+
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import interrupt
+
+# Imports locais (mesmo package)
+sys.path.insert(0, str(Path(__file__).parent))
+from db import search_skills
+from embeddings import embed
+from reranker import rerank
+from config import LLM_BASE_URL, CHAT_MODEL, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
+
+# ── LLM ─────────────────────────────────────────────────────────────────────
+# Aponta para o Ollama remoto (ou local) via API OpenAI-compatible
+llm = ChatOpenAI(
+    base_url=f"{LLM_BASE_URL}",
+    api_key="ollama",               # Ollama não precisa de key real
+    model=CHAT_MODEL,
+    temperature=0.2,
+    max_tokens=2048,
+)
+
+# ── State ────────────────────────────────────────────────────────────────────
+class IncidentState(TypedDict):
+    # Input
+    alert_raw: str
+
+    # Extraído do alerta
+    incident_id: str
+    project: str
+    service: str
+    region: str
+    alert_ts: str           # ISO 8601
+    condition_name: str
+    alert_url: str
+
+    # Logs de erro em torno do alerta
+    error_logs: str         # JSON string com top erros
+
+    # Release correlation
+    release_found: bool
+    release_id: str
+    release_ts: str
+    release_logs: str
+
+    # Output
+    report: str
+    engineer_response: str  # preenchido após interrupt()
+    decision: Literal["rollback", "escalate", "close", "monitor"]
+
+
+# ── Skill retrieval ──────────────────────────────────────────────────────────
+SKILL_MIN_SCORE = 0.70
+SKILL_CANDIDATE_SCORE = 0.45
+
+
+def get_skill(query: str) -> str:
+    """Devolve o body da skill mais relevante ou string vazia."""
+    qvec = embed([query])[0]
+    raw = search_skills(qvec, TOP_K_RETRIEVE_SKILLS)
+    if not raw:
+        return ""
+    if USE_RERANKER:
+        texts = [f"{r[0]}\n{r[1]}\n{r[2][:1000]}" for r in raw]
+        ranked = rerank(query, texts, top_k=1)
+        if ranked:
+            idx, score = ranked[0]
+            if score >= SKILL_MIN_SCORE:
+                return f"[skill: {raw[idx][0]}]\n\n{raw[idx][2]}"
+    else:
+        if raw[0][3] >= SKILL_MIN_SCORE:
+            return f"[skill: {raw[0][0]}]\n\n{raw[0][2]}"
+    return ""
+
+
+def call_llm(system: str, user: str) -> str:
+    from langchain_core.messages import SystemMessage, HumanMessage
+    resp = llm.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+    return resp.content
+
+
+# ── Nodes ────────────────────────────────────────────────────────────────────
+
+def parse_alert(state: IncidentState) -> dict:
+    """Extrai campos estruturados do payload do alerta."""
+    skill = get_skill("parse GCP alert notification Apdex error rate")
+    system = f"""{skill}
+
+Extract the following fields from the GCP alert JSON and return ONLY valid JSON:
+{{
+  "incident_id": "...",
+  "project": "...",
+  "service": "...",
+  "region": "...",
+  "alert_ts": "ISO8601",
+  "condition_name": "...",
+  "alert_url": "..."
+}}
+If a field is missing, use an empty string."""
+
+    result = call_llm(system, state["alert_raw"])
+
+    try:
+        # Extrai JSON da resposta (o LLM pode ter texto à volta)
+        start = result.index("{")
+        end = result.rindex("}") + 1
+        data = json.loads(result[start:end])
+    except (ValueError, json.JSONDecodeError):
+        data = {}
+
+    return {
+        "incident_id":    data.get("incident_id", "unknown"),
+        "project":        data.get("project", ""),
+        "service":        data.get("service", ""),
+        "region":         data.get("region", "europe-west1"),
+        "alert_ts":       data.get("alert_ts", datetime.now(timezone.utc).isoformat()),
+        "condition_name": data.get("condition_name", ""),
+        "alert_url":      data.get("alert_url", ""),
+    }
+
+
+def fetch_errors(state: IncidentState) -> dict:
+    """Corre gcloud logging read ±30 min à volta do alerta."""
+    skill = get_skill("gcloud logging read error logs Cloud Run service")
+
+    alert_dt = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    window_start = (alert_dt - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cmd = [
+        "gcloud", "logging", "read",
+        (
+            f'resource.type="cloud_run_revision"'
+            f' AND resource.labels.service_name="{state["service"]}"'
+            f' AND severity>=ERROR'
+            f' AND timestamp>="{window_start}"'
+            f' AND timestamp<="{window_end}"'
+        ),
+        f"--project={state['project']}",
+        "--format=json",
+        "--limit=100",
+    ]
+
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        logs_raw = out.stdout or "[]"
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logs_raw = "[]"
+
+    # Pede ao LLM para sumarizar os top erros (usa a skill de alerting)
+    system = f"""{skill}
+
+Summarise the top 5 error patterns from these Cloud Run logs.
+Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]
+If no errors, return []."""
+
+    summary = call_llm(system, logs_raw[:6000])  # cap para não encher contexto
+
+    return {"error_logs": summary}
+
+
+def check_release(state: IncidentState) -> dict:
+    """Verifica se houve release no Cloud Deploy na hora anterior ao alerta."""
+    skill = get_skill("Cloud Deploy release rollout history timestamp")
+
+    alert_dt = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    window_start = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # TODO: substituir pelo pipeline real
+    pipeline = f"{state['service']}-pipeline"
+
+    cmd = [
+        "gcloud", "deploy", "rollouts", "list",
+        f"--delivery-pipeline={pipeline}",
+        f"--region={state['region']}",
+        f"--project={state['project']}",
+        "--format=json",
+        f"--filter=deployStartTime >= {window_start} AND deployStartTime <= {state['alert_ts']}",
+    ]
+
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        rollouts = json.loads(out.stdout or "[]")
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        rollouts = []
+
+    if rollouts:
+        latest = rollouts[0]
+        return {
+            "release_found": True,
+            "release_id":    latest.get("name", "").split("/")[-1],
+            "release_ts":    latest.get("deployStartTime", ""),
+        }
+    return {
+        "release_found": False,
+        "release_id":    "",
+        "release_ts":    "",
+    }
+
+
+def fetch_release_logs(state: IncidentState) -> dict:
+    """Repete fetch_errors mas centrado no timestamp da release."""
+    if not state.get("release_ts"):
+        return {"release_logs": "[]"}
+
+    skill = get_skill("gcloud logging read error logs Cloud Run service")
+
+    rel_dt = datetime.fromisoformat(state["release_ts"].replace("Z", "+00:00"))
+    window_start = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end   = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cmd = [
+        "gcloud", "logging", "read",
+        (
+            f'resource.type="cloud_run_revision"'
+            f' AND resource.labels.service_name="{state["service"]}"'
+            f' AND severity>=ERROR'
+            f' AND timestamp>="{window_start}"'
+            f' AND timestamp<="{window_end}"'
+        ),
+        f"--project={state['project']}",
+        "--format=json",
+        "--limit=100",
+    ]
+
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        logs_raw = out.stdout or "[]"
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logs_raw = "[]"
+
+    system = f"""{skill}
+
+Summarise errors that appeared AFTER the release deploy.
+Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
+
+    summary = call_llm(system, logs_raw[:6000])
+    return {"release_logs": summary}
+
+
+def build_report(state: IncidentState) -> dict:
+    """Monta o relatório de incidente com toda a informação recolhida."""
+    skill = get_skill("incident report template SRE post-mortem")
+
+    context = json.dumps({
+        "incident_id":    state.get("incident_id"),
+        "service":        state.get("service"),
+        "project":        state.get("project"),
+        "alert_ts":       state.get("alert_ts"),
+        "condition":      state.get("condition_name"),
+        "error_logs":     state.get("error_logs"),
+        "release_found":  state.get("release_found"),
+        "release_id":     state.get("release_id"),
+        "release_ts":     state.get("release_ts"),
+        "release_logs":   state.get("release_logs"),
+        "alert_url":      state.get("alert_url"),
+    }, indent=2)
+
+    system = f"""{skill}
+
+Using the incident data below, generate a concise incident report in Markdown.
+Include: Impact, Timeline, Error Pattern, Release Correlation, Recommended Action.
+End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
+
+    report = call_llm(system, context)
+    return {"report": report}
+
+
+def notify_and_wait(state: IncidentState) -> dict:
+    """Envia notificação ao engenheiro e aguarda resposta (LangGraph interrupt)."""
+    # Envia para Slack/PagerDuty — substituir pelo webhook real
+    print("\n" + "="*60)
+    print("INCIDENT REPORT")
+    print("="*60)
+    print(state["report"])
+    print("="*60)
+
+    # TODO: substituir por chamada real ao Slack/PagerDuty
+    # import httpx
+    # httpx.post(SLACK_WEBHOOK, json={"text": state["report"]})
+
+    # interrupt() pausa o grafo aqui e devolve controlo ao caller.
+    # O caller pode chamar graph.invoke() novamente com o engineer_response.
+    response = interrupt("Aguardando resposta do engenheiro (rollback/escalate/monitor/close):")
+
+    return {"engineer_response": response}
+
+
+def decide(state: IncidentState) -> dict:
+    """Decide a acção final com base na resposta do engenheiro."""
+    response = (state.get("engineer_response") or "").lower()
+
+    if "rollback" in response:
+        decision = "rollback"
+    elif "escalate" in response:
+        decision = "escalate"
+    elif "close" in response:
+        decision = "close"
+    else:
+        decision = "monitor"
+
+    print(f"\n→ Decision: {decision}")
+
+    # TODO: executar a acção (chamar terragrunt, gcloud deploy rollback, etc.)
+
+    return {"decision": decision}
+
+
+# ── Edges ────────────────────────────────────────────────────────────────────
+
+def route_release(state: IncidentState) -> str:
+    return "fetch_release_logs" if state.get("release_found") else "build_report"
+
+
+# ── Graph ────────────────────────────────────────────────────────────────────
+
+def build_graph():
+    g = StateGraph(IncidentState)
+
+    g.add_node("parse_alert",        parse_alert)
+    g.add_node("fetch_errors",       fetch_errors)
+    g.add_node("check_release",      check_release)
+    g.add_node("fetch_release_logs", fetch_release_logs)
+    g.add_node("build_report",       build_report)
+    g.add_node("notify_and_wait",    notify_and_wait)
+    g.add_node("decide",             decide)
+
+    g.set_entry_point("parse_alert")
+    g.add_edge("parse_alert",        "fetch_errors")
+    g.add_edge("fetch_errors",       "check_release")
+    g.add_conditional_edges("check_release", route_release)
+    g.add_edge("fetch_release_logs", "build_report")
+    g.add_edge("build_report",       "notify_and_wait")
+    g.add_edge("notify_and_wait",    "decide")
+    g.add_edge("decide",             END)
+
+    return g.compile(checkpointer=MemorySaver())
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Incident Response Graph")
+    parser.add_argument("--alert", required=True, help="Path to alert JSON file")
+    parser.add_argument("--thread", default="incident-1", help="Thread ID for checkpointing")
+    args = parser.parse_args()
+
+    alert_raw = Path(args.alert).read_text()
+    graph = build_graph()
+    config = {"configurable": {"thread_id": args.thread}}
+
+    # Primeira execução — corre até ao interrupt()
+    print("▶ Starting incident response graph...")
+    result = graph.invoke({"alert_raw": alert_raw}, config=config)
+
+    # Se parou no interrupt, aguarda input do engenheiro
+    if graph.get_state(config).next:
+        print("\nGraph paused at notify_and_wait. Enter engineer response:")
+        engineer_input = input("> ").strip()
+
+        # Retoma o grafo com a resposta do engenheiro
+        result = graph.invoke(
+            {"engineer_response": engineer_input},
+            config=config,
+        )
+
+    print(f"\n✓ Incident closed. Decision: {result.get('decision')}")
