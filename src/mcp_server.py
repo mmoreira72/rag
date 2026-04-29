@@ -47,16 +47,15 @@ def search_skills_tool(query: str, k: int = 3) -> str:
     """
     Busca skills (runbooks e procedimentos do Marcelo) relevantes para a query.
 
-    CHAMA ESTA TOOL ANTES DE RESPONDER sempre que a pergunta envolver:
-    - GCP: Cloud SQL, GKE, Pub/Sub, IAM, VPC, Cloud Run, Dataproc
-    - IaC: Terraform, Terragrunt, módulos, PR validation, plan/apply
-    - SRE: incidentes, SLOs, alertas, runbooks, on-call
-    - Git: branches, squash, PRs, conflitos
-    - Qualquer procedimento técnico recorrente do Marcelo
+    CHAMA SEMPRE ESTA TOOL COMO PRIMEIRO PASSO antes de qualquer resposta técnica.
+    Não tentes adivinhar se existe uma skill — deixa o retrieval decidir.
+
+    A tool retorna:
+    - score >= 0.70 → skill com conteúdo completo (usa-a e começa com [skill: nome])
+    - score 0.45–0.69 → lista de candidatas para o utilizador escolher
+    - nada → avisa e responde do conhecimento geral sem inventar procedimentos
 
     Retorna até `k` skills com conteúdo completo e score de confiança.
-    Se o score for insuficiente, lista candidatos e pede ao utilizador para escolher.
-    NÃO inventes procedimentos se a tool não devolver conteúdo confiante.
     """
     qvec = embed([query])[0]
     raw = search_skills(qvec, max(k, TOP_K_RETRIEVE_SKILLS))
