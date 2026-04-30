@@ -198,18 +198,19 @@ def fetch_errors(state: IncidentState) -> dict:
     project      = state["project"]
     service      = state["service"]
 
-    # Query única — todos os logs na janela de ±90 min, sem filtro de severidade
-    # (OOM do Node.js pode aparecer como DEFAULT, não ERROR)
+    # Query A — últimas 6h antes do alerta, sem filtro de severidade
+    # (OOM do Node.js aparece como DEFAULT, e pode preceder o alerta por horas)
+    six_hours_before = (alert_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
     all_logs = _run_gcloud_logging(
         (
             f'resource.type="cloud_run_revision"'
             f' AND resource.labels.service_name="{service}"'
-            f' AND timestamp>="{window_start}"'
+            f' AND timestamp>="{six_hours_before}"'
             f' AND timestamp<="{window_end}"'
         ),
         project,
         limit=150,
-        label="all",
+        label="6h",
     )
 
     # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)
