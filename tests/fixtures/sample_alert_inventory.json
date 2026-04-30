@@ -1,0 +1,29 @@
+{
+  "incident": {
+    "incident_id": "0.m_inventory_500_test",
+    "policy_name": "projects/hw-prod-svc-sre-mon-a1f1/alertPolicies/10027447999181184371",
+    "policy_display_name": "[Cloudrun] inventory-service-api-set-availability response code - 500",
+    "resource": {
+      "type": "cloud_run_revision",
+      "labels": {
+        "project_id": "TODO_INVENTORY_SERVICE_PROJECT",
+        "service_name": "inventory-service-api-set-availability",
+        "location": "europe-west1"
+      }
+    },
+    "metric": {
+      "type": "run.googleapis.com/request_count",
+      "displayName": "Request count",
+      "labels": {
+        "response_code": "500"
+      }
+    },
+    "started_at": 1746007200,
+    "ended_at": null,
+    "state": "open",
+    "condition_name": "inventory-service-api-set-availability response code - 500",
+    "threshold_value": "10",
+    "monitoring_project": "hw-prod-svc-sre-mon-a1f1",
+    "url": "https://console.cloud.google.com/monitoring/alerting/incidents/0.m_inventory_500_test?project=hw-prod-svc-sre-mon-a1f1"
+  }
+}

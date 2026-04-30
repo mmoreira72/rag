@@ -114,40 +114,55 @@ def call_llm(system: str, user: str) -> str:
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
 def parse_alert(state: IncidentState) -> dict:
-    """Extrai campos estruturados do payload do alerta."""
-    skill = get_skill("parse GCP alert notification Apdex error rate")
-    system = f"""{skill}
+    """Extrai campos estruturados do payload do alerta.
 
-Extract the following fields from the GCP alert JSON and return ONLY valid JSON:
-{{
-  "incident_id": "...",
-  "project": "...",
-  "service": "...",
-  "region": "...",
-  "alert_ts": "ISO8601",
-  "condition_name": "...",
-  "alert_url": "..."
-}}
-If a field is missing, use an empty string."""
-
-    result = call_llm(system, state["alert_raw"])
-
+    Suporta dois formatos:
+    - GCP Pub/Sub notification (campo 'incident' no root)
+    - Formato simplificado (campos directos no root)
+    """
     try:
-        # Extrai JSON da resposta (o LLM pode ter texto à volta)
-        start = result.index("{")
-        end = result.rindex("}") + 1
-        data = json.loads(result[start:end])
-    except (ValueError, json.JSONDecodeError):
-        data = {}
+        raw = json.loads(state["alert_raw"])
+    except json.JSONDecodeError:
+        raw = {}
+
+    # Formato nativo GCP (Pub/Sub notification)
+    inc = raw.get("incident", raw)
+
+    # started_at pode ser Unix timestamp ou ISO string
+    started_at = inc.get("started_at", "")
+    if isinstance(started_at, (int, float)):
+        alert_ts = datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat()
+    elif started_at:
+        alert_ts = started_at
+    else:
+        alert_ts = datetime.now(timezone.utc).isoformat()
+
+    resource = inc.get("resource", {})
+    labels   = resource.get("labels", {})
+
+    # project_id: tenta resource.labels, fallback para monitoring_project
+    project = (
+        labels.get("project_id")
+        or inc.get("project_id")
+        or inc.get("monitoring_project")
+        or ""
+    )
+    # Remove placeholder de teste
+    if project.startswith("TODO"):
+        project = inc.get("monitoring_project", "")
 
     return {
-        "incident_id":    data.get("incident_id", "unknown"),
-        "project":        data.get("project", ""),
-        "service":        data.get("service", ""),
-        "region":         data.get("region", "europe-west1"),
-        "alert_ts":       data.get("alert_ts", datetime.now(timezone.utc).isoformat()),
-        "condition_name": data.get("condition_name", ""),
-        "alert_url":      data.get("alert_url", ""),
+        "incident_id":    inc.get("incident_id") or inc.get("name", "unknown"),
+        "project":        project,
+        "service":        labels.get("service_name") or inc.get("service", ""),
+        "region":         labels.get("location") or labels.get("region") or "europe-west1",
+        "alert_ts":       alert_ts,
+        "condition_name": (
+            inc.get("condition_name")
+            or inc.get("policy_display_name")
+            or inc.get("condition", {}).get("displayName", "")
+        ),
+        "alert_url":      inc.get("url") or inc.get("alert_url", ""),
     }
 
 
