@@ -714,32 +714,66 @@ def fetch_slo(state: IncidentState) -> dict:
             slo_summary.append({
                 "slo_id":    slo_id,
                 "type":      slo_type,
-                "goal":      goal,
+                "goal":      f"{goal*100:.1f}%",
                 "burn_rate": burn_rate,
-                "budget_exhausted_in_hours": round(720 / burn_rate, 1) if burn_rate and burn_rate > 0 else None,
+                "budget_exhausted_in_hours": round(720 / burn_rate, 1) if burn_rate and burn_rate > 0 else "unknown — query live data in console",
             })
 
     except Exception as e:
         print(f"  [slo] ERROR: {e}")
         slo_summary = []
 
+    # Tenta buscar logs de erro do serviço (via project do monitoring — cross-project)
+    alert_dt      = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
+    six_hours_ago = (alert_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end    = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    error_logs = _run_gcloud_logging(
+        (
+            f'resource.type="cloud_run_revision"'
+            f' AND resource.labels.service_name="{service_name}"'
+            f' AND timestamp>="{six_hours_ago}"'
+            f' AND timestamp<="{window_end}"'
+        ),
+        monitoring_project,
+        limit=50,
+        label="slo-errors",
+    )
+    log_lines = []
+    for entry in error_logs:
+        ts  = entry.get("timestamp", "")
+        sev = entry.get("severity", "")
+        msg = (entry.get("textPayload")
+               or entry.get("jsonPayload", {}).get("message", "")
+               or "")
+        if msg:
+            log_lines.append(f"[{ts}] [{sev}] {msg[:200]}")
+
+    # Console link directo para o SLO dashboard
+    console_url = (
+        f"https://console.cloud.google.com/monitoring/services"
+        f"/{service_name}?project={monitoring_project}"
+    )
+
     compact = json.dumps({
-        "service":    service_name,
-        "alert":      state.get("condition_name"),
-        "threshold":  "10x burn rate",
-        "slos":       slo_summary,
+        "service":     service_name,
+        "alert":       state.get("condition_name"),
+        "threshold":   "burn rate > 10x (error budget exhausts in ~3 days at this rate)",
+        "slos":        slo_summary,
+        "error_logs":  log_lines[:20] or ["No Cloud Run logs found — service may be in a different project"],
+        "console":     console_url,
     })
 
     system = f"""{skill}
 
-Analyze this SLO burn rate incident.
-A 10x burn rate at 1h window means the 30-day error budget exhausts in ~3 days.
-For each SLO, report: current burn rate, time to budget exhaustion, likely cause.
-Return JSON: [{{"slo": "...", "burn_rate": N, "hours_to_exhaustion": N,
-               "likely_cause": "...", "root_cause": true/false}}]"""
+Analyze this SLO burn rate incident for {service_name}.
+Burn rate > 10x at 1h window = error budget exhausts in ~3 days.
+Use error_logs to identify the underlying cause (errors, latency spikes).
+Include the console URL in the report.
+Return JSON: [{{"slo": "...", "goal": "...", "likely_cause": "...", "root_cause": true/false}}]"""
 
-    summary = call_llm(system, compact[:2500])
-    return {"metrics_data": summary, "error_logs": ""}
+    summary = call_llm(system, compact[:3000])
+    return {"metrics_data": summary, "error_logs": "\n".join(log_lines[:10])}
 
 
 def route_alert_type(state: IncidentState) -> str:
