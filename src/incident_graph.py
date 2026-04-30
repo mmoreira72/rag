@@ -337,7 +337,16 @@ Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cau
 
 def fetch_metrics(state: IncidentState) -> dict:
     """Para alertas metric-based: consulta time series e descreve o recurso."""
-    skill = get_skill(f"{state.get('resource_type', '')} metrics throughput backlog")
+    skill_query_map = {
+        "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages drain",
+        "cloudsql_database":   "Cloud SQL replication lag slow query operations",
+        "gce_instance":        "GCE instance CPU memory disk metrics",
+    }
+    skill_query = skill_query_map.get(
+        state.get("resource_type", ""),
+        "GCP metrics throughput monitoring alert"
+    )
+    skill = get_skill(skill_query)
 
     alert_dt   = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
     start_time = (alert_dt - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
