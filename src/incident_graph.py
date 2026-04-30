@@ -198,49 +198,47 @@ def fetch_errors(state: IncidentState) -> dict:
     project      = state["project"]
     service      = state["service"]
 
-    # Query 1 — erros gerais na janela de ±90 min
-    general_logs = _run_gcloud_logging(
+    # Query única — todos os logs na janela de ±90 min, sem filtro de severidade
+    # (OOM do Node.js pode aparecer como DEFAULT, não ERROR)
+    all_logs = _run_gcloud_logging(
         (
             f'resource.type="cloud_run_revision"'
             f' AND resource.labels.service_name="{service}"'
-            f' AND severity>=ERROR'
             f' AND timestamp>="{window_start}"'
             f' AND timestamp<="{window_end}"'
         ),
         project,
-        label="general",
+        limit=150,
+        label="all",
     )
 
-    # Query 2 — OOM / heap nas últimas 4 horas (usa OR simples, sem parênteses aninhados)
-    oom_logs = _run_gcloud_logging(
-        (
-            f'resource.type="cloud_run_revision"'
-            f' AND resource.labels.service_name="{service}"'
-            f' AND textPayload:"memory"'
-            f' AND timestamp>="{oom_start}"'
-            f' AND timestamp<="{window_end}"'
-        ),
-        project,
-        limit=20,
-        label="oom",
-    )
+    # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)
+    log_lines = []
+    for entry in all_logs:
+        ts  = entry.get("timestamp", "")
+        sev = entry.get("severity", "DEFAULT")
+        msg = (
+            entry.get("textPayload")
+            or entry.get("jsonPayload", {}).get("message")
+            or entry.get("jsonPayload", {}).get("msg")
+            or str(entry.get("jsonPayload", ""))
+        )
+        if msg:
+            log_lines.append(f"[{ts}] [{sev}] {msg[:300]}")
 
-    combined = json.dumps({
-        "general_errors": general_logs[:50],
-        "oom_errors":     oom_logs,
-    })
+    combined = "\n".join(log_lines[:100])
 
     system = f"""{skill}
 
-You have two sets of Cloud Run logs:
-- general_errors: errors in ±90 min around the alert
-- oom_errors: JavaScript heap/memory errors in the last 4 hours
+Analyze these Cloud Run logs and identify ALL error patterns.
+Pay special attention to:
+- "FATAL ERROR" / "heap out of memory" / "Allocation failed" → JavaScript OOM (ROOT CAUSE)
+- "LIVENESS probe failed" → instance killed after OOM (SYMPTOM)
+- Connection errors / 503 → consequence of restarts (SYMPTOM)
 
-Identify the ROOT CAUSE (not just symptoms). If OOM errors are present and
-predate the liveness probe failures, highlight that as the root cause.
+If OOM errors predate the liveness failures, mark them as root_cause=true.
 
-Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true/false}}]
-Mark root_cause=true for the pattern that caused the others."""
+Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true/false}}]"""
 
     summary = call_llm(system, combined[:8000])
     return {"error_logs": summary}
