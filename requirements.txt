@@ -2,6 +2,7 @@ openai>=1.40.0
 langgraph>=0.2.0
 langchain-openai>=0.1.0
 langchain-core>=0.2.0
+grandalf>=0.7
 psycopg[binary]>=3.2.0
 pgvector>=0.3.0
 mcp>=1.2.0
