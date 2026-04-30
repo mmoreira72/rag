@@ -436,7 +436,10 @@ if __name__ == "__main__":
         print("\n── Mermaid ──────────────────────────────────────────────")
         print(graph.get_graph().draw_mermaid())
         print("\n── ASCII ────────────────────────────────────────────────")
-        graph.get_graph().print_ascii()
+        try:
+            graph.get_graph().print_ascii()
+        except ImportError:
+            print("(install grandalf for ASCII: uv pip install grandalf)")
         sys.exit(0)
 
     if not args.alert:
