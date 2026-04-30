@@ -61,6 +61,7 @@ class IncidentState(TypedDict):
     incident_id: str
     project: str
     service: str
+    resource_type: str      # cloud_run_revision | pubsub_subscription | etc.
     region: str
     alert_ts: str           # ISO 8601
     condition_name: str
@@ -137,24 +138,40 @@ def parse_alert(state: IncidentState) -> dict:
     else:
         alert_ts = datetime.now(timezone.utc).isoformat()
 
-    resource = inc.get("resource", {})
-    labels   = resource.get("labels", {})
+    resource      = inc.get("resource", {})
+    labels        = resource.get("labels", {})
+    resource_type = resource.get("type", "")
+    monitoring_project = inc.get("monitoring_project", "")
 
-    # project_id: tenta resource.labels, fallback para monitoring_project
-    project = (
-        labels.get("project_id")
-        or inc.get("project_id")
-        or inc.get("monitoring_project")
-        or ""
+    # project_id: tenta resource.labels primeiro
+    project = labels.get("project_id") or inc.get("project_id") or ""
+
+    # Se não veio no payload (ou é placeholder), resolve via monitoring API
+    if not project or project.startswith("TODO"):
+        metric_type = inc.get("metric", {}).get("type", "")
+        resource_id = (
+            labels.get("subscription_id")
+            or labels.get("service_name")
+            or labels.get("instance_id")
+            or ""
+        )
+        project = _resolve_project(
+            monitoring_project, metric_type, resource_type, resource_id, alert_ts
+        ) or monitoring_project
+
+    # service: nome do recurso monitorizado
+    service = (
+        labels.get("service_name")
+        or labels.get("subscription_id")
+        or labels.get("instance_id")
+        or inc.get("service", "")
     )
-    # Remove placeholder de teste
-    if project.startswith("TODO"):
-        project = inc.get("monitoring_project", "")
 
     return {
         "incident_id":    inc.get("incident_id") or inc.get("name", "unknown"),
         "project":        project,
-        "service":        labels.get("service_name") or inc.get("service", ""),
+        "service":        service,
+        "resource_type":  resource_type,
         "region":         labels.get("location") or labels.get("region") or "europe-west1",
         "alert_ts":       alert_ts,
         "condition_name": (
@@ -164,6 +181,41 @@ def parse_alert(state: IncidentState) -> dict:
         ),
         "alert_url":      inc.get("url") or inc.get("alert_url", ""),
     }
+
+
+def _resolve_project(monitoring_project: str, metric_type: str,
+                     resource_type: str, resource_id: str, alert_ts: str) -> str:
+    """Descobre o project_id do recurso consultando o monitoring project.
+
+    O monitoring project tem acesso cross-project às métricas — a resposta
+    do time series inclui resource.labels.project_id do recurso real.
+    """
+    if not monitoring_project or not metric_type:
+        return ""
+
+    alert_dt   = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
+    start_time = (alert_dt - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_time   = alert_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    cmd = [
+        "gcloud", "monitoring", "time-series", "list",
+        f"--filter=metric.type=\"{metric_type}\"",
+        f"--project={monitoring_project}",
+        f"--interval-start-time={start_time}",
+        f"--interval-end-time={end_time}",
+        "--format=json",
+    ]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        series = json.loads(out.stdout or "[]")
+        if series:
+            pid = series[0].get("resource", {}).get("labels", {}).get("project_id", "")
+            if pid:
+                print(f"  [resolve_project] found: {pid}")
+                return pid
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+    return ""
 
 
 def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100, label: str = "") -> list:
@@ -185,32 +237,41 @@ def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100, label: 
 
 
 def fetch_errors(state: IncidentState) -> dict:
-    """Corre gcloud logging read com duas queries:
-    1. Erros gerais ±90 min (janela larga para capturar causa antes do sintoma)
-    2. Erros de memória/OOM nas últimas 4 horas (padrões de memory leak)
-    """
-    skill = get_skill("gcloud logging read error logs Cloud Run service")
+    """Busca logs adaptando o resource_type e a skill ao tipo de alerta."""
+    alert_dt      = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    window_end    = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    six_hours_ago = (alert_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project       = state["project"]
+    service       = state["service"]
+    rtype         = state.get("resource_type") or "cloud_run_revision"
 
-    alert_dt    = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
-    window_start = (alert_dt - timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    window_end   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    oom_start    = (alert_dt - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    project      = state["project"]
-    service      = state["service"]
+    # Constrói o resource label correcto conforme o tipo de recurso
+    resource_label_map = {
+        "cloud_run_revision":   f'resource.labels.service_name="{service}"',
+        "pubsub_subscription":  f'resource.labels.subscription_id="{service}"',
+        "cloudsql_database":    f'resource.labels.database_id="{service}"',
+        "gce_instance":         f'resource.labels.instance_id="{service}"',
+    }
+    resource_filter = resource_label_map.get(rtype, f'resource.labels.service_name="{service}"')
 
-    # Query A — últimas 6h antes do alerta, sem filtro de severidade
-    # (OOM do Node.js aparece como DEFAULT, e pode preceder o alerta por horas)
-    six_hours_before = (alert_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # get_skill dinâmico baseado no tipo de recurso
+    skill_query = {
+        "cloud_run_revision":  "gcloud logging read error Cloud Run service",
+        "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages",
+        "cloudsql_database":   "Cloud SQL error logs slow query",
+    }.get(rtype, "gcloud logging read error logs GCP")
+    skill = get_skill(skill_query)
+
     all_logs = _run_gcloud_logging(
         (
-            f'resource.type="cloud_run_revision"'
-            f' AND resource.labels.service_name="{service}"'
-            f' AND timestamp>="{six_hours_before}"'
+            f'resource.type="{rtype}"'
+            f' AND {resource_filter}'
+            f' AND timestamp>="{six_hours_ago}"'
             f' AND timestamp<="{window_end}"'
         ),
         project,
         limit=150,
-        label="6h",
+        label=f"6h:{rtype}",
     )
 
     # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)

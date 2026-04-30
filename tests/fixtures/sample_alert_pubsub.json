@@ -1,0 +1,28 @@
+{
+  "incident": {
+    "incident_id": "0.m_pubsub_test",
+    "policy_name": "projects/hw-prod-svc-sre-mon-a1f1/alertPolicies/10020766303790363166",
+    "policy_display_name": "[Pubsub] - booking-service-cdc-customer-map subscription alert",
+    "resource": {
+      "type": "pubsub_subscription",
+      "labels": {
+        "project_id": "TODO_BOOKING_PROJECT",
+        "subscription_id": "booking-service-cdc-customer-map",
+        "location": "europe-west1"
+      }
+    },
+    "metric": {
+      "type": "pubsub.googleapis.com/subscription/sent_message_count",
+      "displayName": "Sent message count"
+    },
+    "condition_type": "COMPARISON_LT",
+    "threshold_value": "5",
+    "condition_window": "3600s",
+    "started_at": 1777537800,
+    "ended_at": null,
+    "state": "open",
+    "condition_name": "booking-service-cdc-customer-map subscription alert",
+    "monitoring_project": "hw-prod-svc-sre-mon-a1f1",
+    "url": "https://console.cloud.google.com/monitoring/alerting/incidents/0.m_pubsub_test?project=hw-prod-svc-sre-mon-a1f1"
+  }
+}
