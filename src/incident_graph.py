@@ -175,11 +175,17 @@ def parse_alert(state: IncidentState) -> dict:
     metric_type    = inc.get("metric", {}).get("type", "")
     condition_type = inc.get("condition_type", "COMPARISON_GT")
 
-    # Classificação: metric-based quando o recurso não gera logs de aplicação
-    # ou quando o alerta é sobre ausência/queda de throughput (COMPARISON_LT)
+    # Classificação do tipo de alerta
     LOG_BASED_RESOURCES = {"cloud_run_revision", "gae_app", "gce_instance",
                            "cloudsql_database", "k8s_container"}
-    if resource_type in LOG_BASED_RESOURCES and condition_type != "COMPARISON_LT":
+    is_slo = (
+        "select_slo_burn_rate" in metric_type
+        or "slo" in (inc.get("policy_display_name", "") or "").lower()
+        or bool(inc.get("slo_resources"))
+    )
+    if is_slo:
+        alert_type = "slo-based"
+    elif resource_type in LOG_BASED_RESOURCES and condition_type != "COMPARISON_LT":
         alert_type = "log-based"
     else:
         alert_type = "metric-based"
@@ -640,8 +646,99 @@ def decide(state: IncidentState) -> dict:
 
 # ── Edges ────────────────────────────────────────────────────────────────────
 
+def fetch_slo(state: IncidentState) -> dict:
+    """Para alertas SLO burn rate: consulta compliance e error budget via REST API."""
+    skill = get_skill("SLO burn rate error budget availability latency")
+
+    monitoring_project = state.get("project") or "hw-prod-svc-sre-mon-a1f1"
+    service_name       = state.get("service") or "categories-service-api"
+    alert_ts           = state.get("alert_ts", "")
+
+    print(f"  [slo] querying SLOs for service={service_name} project={monitoring_project}")
+
+    try:
+        token = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+
+        import urllib.request
+        # 1. Lista os SLOs do serviço
+        url = (f"https://monitoring.googleapis.com/v3/projects/"
+               f"{monitoring_project}/services/{service_name}/serviceLevelObjectives")
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            slos_data = json.loads(resp.read())
+        slos = slos_data.get("serviceLevelObjectives", [])
+        print(f"  [slo] found {len(slos)} SLOs")
+
+        slo_summary = []
+        for slo in slos[:3]:
+            slo_id  = slo.get("name", "").split("/")[-1]
+            goal    = slo.get("goal", 0)
+            slo_type = "availability" if "availability" in slo_id else "latency"
+
+            # 2. Burn rate actual via REST
+            import urllib.parse
+            alert_dt   = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
+            start_time = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_time   = alert_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            slo_path   = f"projects/{monitoring_project}/services/{service_name}/serviceLevelObjectives/{slo_id}"
+            params = urllib.parse.urlencode({
+                "filter": f'select_slo_burn_rate("{slo_path}", "3600s")',
+                "interval.startTime": start_time,
+                "interval.endTime":   end_time,
+                "view": "FULL",
+            })
+            ts_url = (f"https://monitoring.googleapis.com/v3/projects/"
+                      f"{monitoring_project}/timeSeries?{params}")
+            ts_req = urllib.request.Request(ts_url, headers={"Authorization": f"Bearer {token}"})
+            try:
+                with urllib.request.urlopen(ts_req, timeout=15) as r:
+                    ts_data = json.loads(r.read())
+                points = ts_data.get("timeSeries", [{}])[0].get("points", [])
+                burn_rate = float(points[0]["value"].get("doubleValue", 0)) if points else None
+                print(f"  [slo] {slo_id}: burn_rate={burn_rate}")
+            except Exception:
+                burn_rate = None
+
+            slo_summary.append({
+                "slo_id":    slo_id,
+                "type":      slo_type,
+                "goal":      goal,
+                "burn_rate": burn_rate,
+                "budget_exhausted_in_hours": round(720 / burn_rate, 1) if burn_rate and burn_rate > 0 else None,
+            })
+
+    except Exception as e:
+        print(f"  [slo] ERROR: {e}")
+        slo_summary = []
+
+    compact = json.dumps({
+        "service":    service_name,
+        "alert":      state.get("condition_name"),
+        "threshold":  "10x burn rate",
+        "slos":       slo_summary,
+    })
+
+    system = f"""{skill}
+
+Analyze this SLO burn rate incident.
+A 10x burn rate at 1h window means the 30-day error budget exhausts in ~3 days.
+For each SLO, report: current burn rate, time to budget exhaustion, likely cause.
+Return JSON: [{{"slo": "...", "burn_rate": N, "hours_to_exhaustion": N,
+               "likely_cause": "...", "root_cause": true/false}}]"""
+
+    summary = call_llm(system, compact[:2500])
+    return {"metrics_data": summary, "error_logs": ""}
+
+
 def route_alert_type(state: IncidentState) -> str:
-    return "fetch_metrics" if state.get("alert_type") == "metric-based" else "fetch_errors"
+    atype = state.get("alert_type", "log-based")
+    if atype == "slo-based":
+        return "fetch_slo"
+    if atype == "metric-based":
+        return "fetch_metrics"
+    return "fetch_errors"
 
 
 def route_release(state: IncidentState) -> str:
@@ -656,6 +753,7 @@ def build_graph():
     g.add_node("parse_alert",        parse_alert)
     g.add_node("fetch_errors",       fetch_errors)       # log-based alerts
     g.add_node("fetch_metrics",      fetch_metrics)      # metric-based alerts
+    g.add_node("fetch_slo",          fetch_slo)          # SLO burn rate alerts
     g.add_node("check_release",      check_release)
     g.add_node("fetch_release_logs", fetch_release_logs)
     g.add_node("build_report",       build_report)
@@ -669,6 +767,7 @@ def build_graph():
 
     g.add_edge("fetch_errors",       "check_release")
     g.add_edge("fetch_metrics",      "check_release")
+    g.add_edge("fetch_slo",          "check_release")
     g.add_conditional_edges("check_release", route_release)
     g.add_edge("fetch_release_logs", "build_report")
     g.add_edge("build_report",       "notify_and_wait")

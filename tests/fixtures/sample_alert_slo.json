@@ -1,0 +1,32 @@
+{
+  "incident": {
+    "incident_id": "0.m_slo_test",
+    "policy_name": "projects/hw-prod-svc-sre-mon-a1f1/alertPolicies/100367538967660523",
+    "policy_display_name": "[SLO] categories-service-api SLO burn rate",
+    "resource": {
+      "type": "generic_node",
+      "labels": {
+        "project_id": "hw-prod-svc-sre-mon-a1f1",
+        "location": "europe-west1",
+        "namespace": "categories-service-api",
+        "node_id": ""
+      }
+    },
+    "metric": {
+      "type": "select_slo_burn_rate",
+      "displayName": "SLO burn rate"
+    },
+    "condition_type": "COMPARISON_GT",
+    "threshold_value": "10",
+    "slo_resources": [
+      "projects/116708965446/services/categories-service-api/serviceLevelObjectives/categories-service-api-latency-slo",
+      "projects/116708965446/services/categories-service-api/serviceLevelObjectives/categories-service-api-availability-slo"
+    ],
+    "started_at": 1777537800,
+    "ended_at": null,
+    "state": "open",
+    "condition_name": "10% burn rate on categories-service-api SLO",
+    "monitoring_project": "hw-prod-svc-sre-mon-a1f1",
+    "url": "https://console.cloud.google.com/monitoring/alerting/incidents/0.m_slo_test?project=hw-prod-svc-sre-mon-a1f1"
+  }
+}
