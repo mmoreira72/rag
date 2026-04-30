@@ -220,23 +220,29 @@ def _resolve_project(monitoring_project: str, metric_type: str,
     start_time = (alert_dt - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_time   = alert_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    cmd = [
-        "gcloud", "monitoring", "time-series", "list",
-        f"--filter=metric.type=\"{metric_type}\"",
-        f"--project={monitoring_project}",
-        f"--interval-start-time={start_time}",
-        f"--interval-end-time={end_time}",
-        "--format=json",
-    ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-        series = json.loads(out.stdout or "[]")
+        import urllib.request, urllib.parse
+        token = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True, text=True, timeout=10).stdout.strip()
+        params = urllib.parse.urlencode({
+            "filter": f'metric.type="{metric_type}"',
+            "interval.startTime": start_time,
+            "interval.endTime":   end_time,
+            "view": "HEADERS",
+        })
+        url = (f"https://monitoring.googleapis.com/v3/projects/"
+               f"{monitoring_project}/timeSeries?{params}")
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        series = data.get("timeSeries", [])
         if series:
             pid = series[0].get("resource", {}).get("labels", {}).get("project_id", "")
             if pid:
-                print(f"  [resolve_project] found: {pid}")
+                print(f"  [resolve_project] found via REST: {pid}")
                 return pid
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+    except Exception:
         pass
     return ""
 
@@ -343,22 +349,51 @@ def fetch_metrics(state: IncidentState) -> dict:
 
     results = {}
 
-    # 1. Time series da métrica do alerta (via monitoring project se cross-project)
-    monitoring_project = project  # usa o projecto resolvido
-    ts_cmd = [
-        "gcloud", "monitoring", "time-series", "list",
-        f"--filter=metric.type=\"{mtype}\"",
-        f"--project={monitoring_project}",
-        f"--interval-start-time={start_time}",
-        f"--interval-end-time={end_time}",
-        "--format=json",
-    ]
+    # 1. Time series via REST API (gcloud monitoring time-series não existe em todas as versões)
+    # Usa o monitoring project para acesso cross-project
+    monitoring_project = "hw-prod-svc-sre-mon-a1f1"  # TODO: tornar configurável
     try:
-        out = subprocess.run(ts_cmd, capture_output=True, text=True, timeout=30)
-        ts_data = json.loads(out.stdout or "[]")
-        print(f"  [metrics:timeseries] {len(ts_data)} series | stderr: {out.stderr[:80] if out.stderr else 'none'}")
-        results["timeseries"] = ts_data[:5]
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        token_out = subprocess.run(
+            ["gcloud", "auth", "print-access-token"],
+            capture_output=True, text=True, timeout=10)
+        token = token_out.stdout.strip()
+
+        import urllib.request, urllib.parse
+        params = urllib.parse.urlencode({
+            "filter": f'metric.type="{mtype}"',
+            "interval.startTime": start_time,
+            "interval.endTime":   end_time,
+            "view": "FULL",
+        })
+        url = (f"https://monitoring.googleapis.com/v3/projects/"
+               f"{monitoring_project}/timeSeries?{params}")
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            ts_json = json.loads(resp.read())
+
+        ts_data = ts_json.get("timeSeries", [])
+        print(f"  [metrics:timeseries] {len(ts_data)} series via REST")
+
+        # Extrai project_id do primeiro resultado se ainda não resolvido
+        if ts_data and (not project or project == monitoring_project):
+            resolved = ts_data[0].get("resource", {}).get("labels", {}).get("project_id", "")
+            if resolved:
+                project = resolved
+                print(f"  [resolve_project] resolved from timeseries: {project}")
+
+        results["timeseries"] = [
+            {
+                "resource_labels": s.get("resource", {}).get("labels", {}),
+                "metric_labels":   s.get("metric", {}).get("labels", {}),
+                "points": [
+                    {"time": p["interval"]["endTime"],
+                     "value": p["value"].get("int64Value") or p["value"].get("doubleValue")}
+                    for p in s.get("points", [])[:10]
+                ],
+            }
+            for s in ts_data[:3]
+        ]
+    except Exception as e:
         print(f"  [metrics:timeseries] ERROR: {e}")
         results["timeseries"] = []
 
