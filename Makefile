@@ -123,6 +123,8 @@ mcp-serve:
 #   LOCAL_PG   — DSN do pgvector local
 SKILLS_DIR ?= $(HOME)/cloudengineerskills/skills
 LOCAL_PG   := postgresql://rag:rag@localhost:5435/rag
+# Força Python 3.14 (Homebrew) para os targets locais — evita o 3.9.6 do sistema
+LOCAL_PY   := uv run --python python3.14 --with-requirements "$(REQS)" python
 
 local-up:
 	docker compose -f docker-compose.local.yml up -d
@@ -141,21 +143,21 @@ local-psql:
 
 local-ingest-skills:
 	@echo "Ingerindo skills de $(SKILLS_DIR) → localhost:5435"
-	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" HF_HUB_OFFLINE=0 $(PY) ingest_skills.py
+	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" HF_HUB_OFFLINE=0 $(LOCAL_PY) ingest_skills.py
 
 local-mcp:
 	@echo "MCP server → localhost:5435 | skills: $(SKILLS_DIR)"
-	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" $(PY) mcp_server.py
+	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" $(LOCAL_PY) mcp_server.py
 
 # ALERT: path para o JSON do alerta (default: sample)
 ALERT ?= $(CURDIR)/tests/fixtures/sample_alert_inventory.json
 
 local-incident:
 	@echo "Running incident graph with alert: $(abspath $(ALERT))"
-	cd src && PG_DSN="$(LOCAL_PG)" $(PY) incident_graph.py --alert "$(abspath $(ALERT))"
+	cd src && PG_DSN="$(LOCAL_PG)" $(LOCAL_PY) incident_graph.py --alert "$(abspath $(ALERT))"
 
 local-graph:
-	cd src && PG_DSN="$(LOCAL_PG)" $(PY) incident_graph.py --print-graph
+	cd src && PG_DSN="$(LOCAL_PG)" $(LOCAL_PY) incident_graph.py --print-graph
 
 # ---------- ollama ----------
 # MODEL pode ser sobrescrito: make ollama-pull MODEL=llama3.2:3b
