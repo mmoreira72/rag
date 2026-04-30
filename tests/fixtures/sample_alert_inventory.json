@@ -18,7 +18,7 @@
         "response_code": "500"
       }
     },
-    "started_at": 1746007200,
+    "started_at": 1777537800,
     "ended_at": null,
     "state": "open",
     "condition_name": "inventory-service-api-set-availability response code - 500",
