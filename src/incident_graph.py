@@ -677,29 +677,39 @@ def fetch_slo(state: IncidentState) -> dict:
             goal    = slo.get("goal", 0)
             slo_type = "availability" if "availability" in slo_id else "latency"
 
-            # 2. Burn rate actual via REST
-            import urllib.parse
+            # 2. Burn rate via MQL query API (select_slo_burn_rate é MQL, não filter)
             alert_dt   = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
-            start_time = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            start_time = (alert_dt - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
             end_time   = alert_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             slo_path   = f"projects/{monitoring_project}/services/{service_name}/serviceLevelObjectives/{slo_id}"
-            params = urllib.parse.urlencode({
-                "filter": f'select_slo_burn_rate("{slo_path}", "3600s")',
-                "interval.startTime": start_time,
-                "interval.endTime":   end_time,
-                "view": "FULL",
-            })
-            ts_url = (f"https://monitoring.googleapis.com/v3/projects/"
-                      f"{monitoring_project}/timeSeries?{params}")
-            ts_req = urllib.request.Request(ts_url, headers={"Authorization": f"Bearer {token}"})
+            mql_body   = json.dumps({
+                "query": (
+                    f'fetch service::slo/window_burn_rate'
+                    f' | filter slo_name = "{slo_id}"'
+                    f' | within {start_time}, {end_time}'
+                )
+            }).encode()
+            mql_url = (f"https://monitoring.googleapis.com/v3/projects/"
+                       f"{monitoring_project}/timeSeries:query")
+            mql_req = urllib.request.Request(
+                mql_url,
+                data=mql_body,
+                headers={"Authorization": f"Bearer {token}",
+                         "Content-Type": "application/json"},
+                method="POST",
+            )
+            burn_rate = None
             try:
-                with urllib.request.urlopen(ts_req, timeout=15) as r:
-                    ts_data = json.loads(r.read())
-                points = ts_data.get("timeSeries", [{}])[0].get("points", [])
-                burn_rate = float(points[0]["value"].get("doubleValue", 0)) if points else None
+                with urllib.request.urlopen(mql_req, timeout=15) as r:
+                    mql_data = json.loads(r.read())
+                ts_list = mql_data.get("timeSeriesData", [])
+                if ts_list:
+                    pts = ts_list[0].get("pointData", [])
+                    if pts:
+                        burn_rate = pts[0].get("values", [{}])[0].get("doubleValue")
                 print(f"  [slo] {slo_id}: burn_rate={burn_rate}")
-            except Exception:
-                burn_rate = None
+            except Exception as e:
+                print(f"  [slo] {slo_id}: burn_rate query failed: {e}")
 
             slo_summary.append({
                 "slo_id":    slo_id,
