@@ -62,13 +62,19 @@ class IncidentState(TypedDict):
     project: str
     service: str
     resource_type: str      # cloud_run_revision | pubsub_subscription | etc.
+    metric_type: str        # pubsub.googleapis.com/... | run.googleapis.com/...
+    condition_type: str     # COMPARISON_GT | COMPARISON_LT
+    alert_type: str         # "log-based" | "metric-based"
     region: str
     alert_ts: str           # ISO 8601
     condition_name: str
     alert_url: str
 
-    # Logs de erro em torno do alerta
-    error_logs: str         # JSON string com top erros
+    # Logs de erro (alertas log-based: Cloud Run, Cloud SQL, GCE)
+    error_logs: str
+
+    # Métricas (alertas metric-based: Pub/Sub, SLO, throughput)
+    metrics_data: str
 
     # Release correlation
     release_found: bool
@@ -159,7 +165,6 @@ def parse_alert(state: IncidentState) -> dict:
             monitoring_project, metric_type, resource_type, resource_id, alert_ts
         ) or monitoring_project
 
-    # service: nome do recurso monitorizado
     service = (
         labels.get("service_name")
         or labels.get("subscription_id")
@@ -167,11 +172,29 @@ def parse_alert(state: IncidentState) -> dict:
         or inc.get("service", "")
     )
 
+    metric_type    = inc.get("metric", {}).get("type", "")
+    condition_type = inc.get("condition_type", "COMPARISON_GT")
+
+    # Classificação: metric-based quando o recurso não gera logs de aplicação
+    # ou quando o alerta é sobre ausência/queda de throughput (COMPARISON_LT)
+    LOG_BASED_RESOURCES = {"cloud_run_revision", "gae_app", "gce_instance",
+                           "cloudsql_database", "k8s_container"}
+    if resource_type in LOG_BASED_RESOURCES and condition_type != "COMPARISON_LT":
+        alert_type = "log-based"
+    else:
+        alert_type = "metric-based"
+
+    print(f"  [parse_alert] resource={resource_type} condition={condition_type} "
+          f"→ alert_type={alert_type} project={project}")
+
     return {
         "incident_id":    inc.get("incident_id") or inc.get("name", "unknown"),
         "project":        project,
         "service":        service,
         "resource_type":  resource_type,
+        "metric_type":    metric_type,
+        "condition_type": condition_type,
+        "alert_type":     alert_type,
         "region":         labels.get("location") or labels.get("region") or "europe-west1",
         "alert_ts":       alert_ts,
         "condition_name": (
@@ -304,6 +327,74 @@ Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cau
 
     summary = call_llm(system, combined[:8000])
     return {"error_logs": summary}
+
+
+def fetch_metrics(state: IncidentState) -> dict:
+    """Para alertas metric-based: consulta time series e descreve o recurso."""
+    skill = get_skill(f"{state.get('resource_type', '')} metrics throughput backlog")
+
+    alert_dt   = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    start_time = (alert_dt - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_time   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project    = state["project"]
+    service    = state["service"]
+    rtype      = state.get("resource_type", "")
+    mtype      = state.get("metric_type", "")
+
+    results = {}
+
+    # 1. Time series da métrica do alerta (via monitoring project se cross-project)
+    monitoring_project = project  # usa o projecto resolvido
+    ts_cmd = [
+        "gcloud", "monitoring", "time-series", "list",
+        f"--filter=metric.type=\"{mtype}\"",
+        f"--project={monitoring_project}",
+        f"--interval-start-time={start_time}",
+        f"--interval-end-time={end_time}",
+        "--format=json",
+    ]
+    try:
+        out = subprocess.run(ts_cmd, capture_output=True, text=True, timeout=30)
+        ts_data = json.loads(out.stdout or "[]")
+        print(f"  [metrics:timeseries] {len(ts_data)} series | stderr: {out.stderr[:80] if out.stderr else 'none'}")
+        results["timeseries"] = ts_data[:5]
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"  [metrics:timeseries] ERROR: {e}")
+        results["timeseries"] = []
+
+    # 2. Descreve o recurso (Pub/Sub subscription, etc.)
+    if rtype == "pubsub_subscription":
+        desc_cmd = [
+            "gcloud", "pubsub", "subscriptions", "describe", service,
+            f"--project={project}",
+            "--format=json",
+        ]
+        try:
+            out = subprocess.run(desc_cmd, capture_output=True, text=True, timeout=20)
+            results["resource_describe"] = json.loads(out.stdout or "{}")
+            print(f"  [metrics:describe] subscription OK" if results["resource_describe"] else "  [metrics:describe] empty")
+        except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"  [metrics:describe] ERROR: {e}")
+            results["resource_describe"] = {}
+
+    combined = json.dumps(results, indent=2)
+
+    system = f"""{skill}
+
+Analyze these GCP metrics for a {rtype} resource named "{service}".
+Alert condition: {state.get('condition_name')}
+Metric type: {mtype}
+
+Identify:
+1. The trend (dropping, spiking, flat)
+2. When it started deviating from normal
+3. Likely cause (publisher stopped, consumer lag, quota, etc.)
+
+Return JSON: [{{"metric": "...", "trend": "...", "deviation_start": "ISO8601",
+               "likely_cause": "...", "root_cause": true/false}}]"""
+
+    summary = call_llm(system, combined[:6000])
+    return {"metrics_data": summary, "error_logs": ""}  # error_logs vazio para metric-based
 
 
 def check_release(state: IncidentState) -> dict:
@@ -453,6 +544,10 @@ def decide(state: IncidentState) -> dict:
 
 # ── Edges ────────────────────────────────────────────────────────────────────
 
+def route_alert_type(state: IncidentState) -> str:
+    return "fetch_metrics" if state.get("alert_type") == "metric-based" else "fetch_errors"
+
+
 def route_release(state: IncidentState) -> str:
     return "fetch_release_logs" if state.get("release_found") else "build_report"
 
@@ -463,7 +558,8 @@ def build_graph():
     g = StateGraph(IncidentState)
 
     g.add_node("parse_alert",        parse_alert)
-    g.add_node("fetch_errors",       fetch_errors)
+    g.add_node("fetch_errors",       fetch_errors)       # log-based alerts
+    g.add_node("fetch_metrics",      fetch_metrics)      # metric-based alerts
     g.add_node("check_release",      check_release)
     g.add_node("fetch_release_logs", fetch_release_logs)
     g.add_node("build_report",       build_report)
@@ -471,8 +567,12 @@ def build_graph():
     g.add_node("decide",             decide)
 
     g.set_entry_point("parse_alert")
-    g.add_edge("parse_alert",        "fetch_errors")
+
+    # Branch: log-based → fetch_errors | metric-based → fetch_metrics
+    g.add_conditional_edges("parse_alert", route_alert_type)
+
     g.add_edge("fetch_errors",       "check_release")
+    g.add_edge("fetch_metrics",      "check_release")
     g.add_conditional_edges("check_release", route_release)
     g.add_edge("fetch_release_logs", "build_report")
     g.add_edge("build_report",       "notify_and_wait")
