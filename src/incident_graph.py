@@ -412,24 +412,40 @@ def fetch_metrics(state: IncidentState) -> dict:
             print(f"  [metrics:describe] ERROR: {e}")
             results["resource_describe"] = {}
 
-    combined = json.dumps(results, indent=2)
+    # Pré-sumariza para não encher o contexto do LLM
+    ts_summary = []
+    for s in results.get("timeseries", [])[:2]:
+        pts = s.get("points", [])
+        ts_summary.append({
+            "resource": s.get("resource_labels", {}),
+            "latest_value": pts[0]["value"] if pts else None,
+            "oldest_value": pts[-1]["value"] if pts else None,
+            "point_count":  len(pts),
+            "first_time":   pts[-1]["time"] if pts else None,
+            "last_time":    pts[0]["time"] if pts else None,
+        })
 
-    system = f"""{skill}
+    desc = results.get("resource_describe", {})
+    desc_summary = {
+        "name": desc.get("name", ""),
+        "topic": desc.get("topic", ""),
+        "messageRetentionDuration": desc.get("messageRetentionDuration", ""),
+        "state": desc.get("pushConfig", {}).get("pushEndpoint", "pull"),
+    } if desc else {}
 
-Analyze these GCP metrics for a {rtype} resource named "{service}".
-Alert condition: {state.get('condition_name')}
-Metric type: {mtype}
+    compact = json.dumps({
+        "alert_condition": state.get("condition_name"),
+        "metric_type": mtype,
+        "timeseries": ts_summary,
+        "resource": desc_summary,
+    })
 
-Identify:
-1. The trend (dropping, spiking, flat)
-2. When it started deviating from normal
-3. Likely cause (publisher stopped, consumer lag, quota, etc.)
+    system = f"""Analyze these GCP {rtype} metrics.
+Identify: trend (dropping/spiking/flat), when it deviated, likely cause.
+Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]"""
 
-Return JSON: [{{"metric": "...", "trend": "...", "deviation_start": "ISO8601",
-               "likely_cause": "...", "root_cause": true/false}}]"""
-
-    summary = call_llm(system, combined[:6000])
-    return {"metrics_data": summary, "error_logs": ""}  # error_logs vazio para metric-based
+    summary = call_llm(system, compact[:2000])
+    return {"metrics_data": summary, "error_logs": ""}
 
 
 def check_release(state: IncidentState) -> dict:
