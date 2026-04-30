@@ -6,7 +6,7 @@
     "resource": {
       "type": "cloud_run_revision",
       "labels": {
-        "project_id": "TODO_INVENTORY_SERVICE_PROJECT",
+        "project_id": "hw-prod-inv-mgmt-plat-bf0d",
         "service_name": "inventory-service-api-set-availability",
         "location": "europe-west1"
       }
