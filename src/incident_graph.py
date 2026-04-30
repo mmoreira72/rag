@@ -80,6 +80,7 @@ class IncidentState(TypedDict):
     release_found: bool
     release_id: str
     release_ts: str
+    release_type: str       # "cloud_run" | "optimizely" | ""
     release_logs: str
 
     # Output
@@ -528,9 +529,41 @@ def check_release(state: IncidentState) -> dict:
                 "release_found": True,
                 "release_id":    rev.get("metadata", {}).get("name", ""),
                 "release_ts":    created,
+                "release_type":  "cloud_run",
             }
 
-    return {"release_found": False, "release_id": "", "release_ts": ""}
+    # 2. Optimizely feature flag changes (Cloud Function logs in monitoring project)
+    # Deployed in hw-prod-svc-sre-mon-a1f1 — logs regardless of service project
+    monitoring_project = "hw-prod-svc-sre-mon-a1f1"
+    opt_logs = _run_gcloud_logging(
+        (
+            f'resource.type="cloud_run_revision"'
+            f' AND resource.labels.service_name="optimizely-webhook"'
+            f' AND labels."source"="optimizely"'
+            f' AND severity="NOTICE"'
+            f' AND timestamp>="{window_start}"'
+            f' AND timestamp<="{state["alert_ts"]}"'
+        ),
+        monitoring_project,
+        limit=5,
+        label="optimizely",
+    )
+
+    if opt_logs:
+        first = opt_logs[0]
+        payload = first.get("jsonPayload", {})
+        event   = payload.get("event", first.get("labels", {}).get("event", ""))
+        rev     = payload.get("revision", "")
+        ts      = first.get("timestamp", "")
+        print(f"  [check_release] Optimizely event: {event} rev={rev} ts={ts}")
+        return {
+            "release_found": True,
+            "release_id":    f"optimizely-rev-{rev} ({event})",
+            "release_ts":    ts,
+            "release_type":  "optimizely",
+        }
+
+    return {"release_found": False, "release_id": "", "release_ts": "", "release_type": ""}
 
 
 def fetch_release_logs(state: IncidentState) -> dict:
@@ -584,9 +617,10 @@ def build_report(state: IncidentState) -> dict:
         "alert_ts":       state.get("alert_ts"),
         "condition":      state.get("condition_name"),
         "alert_type":     state.get("alert_type"),
-        "error_logs":     state.get("error_logs"),      # log-based alerts
-        "metrics_data":   state.get("metrics_data"),    # metric-based alerts
+        "error_logs":     state.get("error_logs"),
+        "metrics_data":   state.get("metrics_data"),
         "release_found":  state.get("release_found"),
+        "release_type":   state.get("release_type"),    # "cloud_run" | "optimizely"
         "release_id":     state.get("release_id"),
         "release_ts":     state.get("release_ts"),
         "release_logs":   state.get("release_logs"),
@@ -597,6 +631,7 @@ def build_report(state: IncidentState) -> dict:
 
 Using the incident data below, generate a concise incident report in Markdown.
 For metric-based alerts use metrics_data; for log-based use error_logs.
+If release_type is "optimizely", highlight it as a FEATURE FLAG CHANGE, not a code deploy.
 Include: Impact, Timeline, Error/Metric Pattern, Release Correlation, Recommended Action.
 End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
 
