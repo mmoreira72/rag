@@ -426,7 +426,10 @@ def fetch_metrics(state: IncidentState) -> dict:
         try:
             out = subprocess.run(desc_cmd, capture_output=True, text=True, timeout=20)
             results["resource_describe"] = json.loads(out.stdout or "{}")
-            print(f"  [metrics:describe] subscription OK" if results["resource_describe"] else "  [metrics:describe] empty")
+            if results["resource_describe"]:
+                print(f"  [metrics:describe] subscription OK project={project}")
+            else:
+                print(f"  [metrics:describe] empty | project={project} | stderr={out.stderr[:120]}")
         except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
             print(f"  [metrics:describe] ERROR: {e}")
             results["resource_describe"] = {}
@@ -452,19 +455,28 @@ def fetch_metrics(state: IncidentState) -> dict:
         "state": desc.get("pushConfig", {}).get("pushEndpoint", "pull"),
     } if desc else {}
 
+    condition_type = state.get("condition_type", "COMPARISON_GT")
+    condition_direction = (
+        "BELOW threshold (too few messages — publisher may have stopped)"
+        if condition_type == "COMPARISON_LT"
+        else "ABOVE threshold (too many messages — backlog growing)"
+    )
+
     compact = json.dumps({
         "alert_condition": state.get("condition_name"),
+        "condition_direction": condition_direction,
         "metric_type": mtype,
         "timeseries": ts_summary,
         "resource": desc_summary,
     })
 
     system = f"""Analyze these GCP {rtype} metrics.
-Identify: trend (dropping/spiking/flat), when it deviated, likely cause.
+IMPORTANT: The alert fired because the metric is {condition_direction}.
+Identify: trend, when it deviated from normal, likely cause (e.g. publisher stopped, consumer lag, quota).
 Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]"""
 
     summary = call_llm(system, compact[:2000])
-    return {"metrics_data": summary, "error_logs": ""}
+    return {"metrics_data": summary, "error_logs": "", "project": project}
 
 
 def check_release(state: IncidentState) -> dict:
