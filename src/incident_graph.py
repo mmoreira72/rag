@@ -425,11 +425,15 @@ def fetch_metrics(state: IncidentState) -> dict:
         ]
         try:
             out = subprocess.run(desc_cmd, capture_output=True, text=True, timeout=20)
-            results["resource_describe"] = json.loads(out.stdout or "{}")
-            if results["resource_describe"]:
-                print(f"  [metrics:describe] subscription OK project={project}")
+            if out.returncode == 0:
+                results["resource_describe"] = json.loads(out.stdout or "{}")
+                print(f"  [metrics:describe] OK project={project}")
             else:
-                print(f"  [metrics:describe] empty | project={project} | stderr={out.stderr[:120]}")
+                # NOT_FOUND é diagnóstico — pode significar subscription deletada
+                err = out.stderr.strip()
+                results["resource_describe"] = {"error": err}
+                results["subscription_not_found"] = "NOT_FOUND" in err
+                print(f"  [metrics:describe] {err[:120]}")
         except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
             print(f"  [metrics:describe] ERROR: {e}")
             results["resource_describe"] = {}
@@ -470,9 +474,16 @@ def fetch_metrics(state: IncidentState) -> dict:
         "resource": desc_summary,
     })
 
+    not_found = results.get("subscription_not_found", False)
+    not_found_hint = (
+        "\nCRITICAL: gcloud reports the subscription does NOT EXIST (NOT_FOUND). "
+        "This is likely the root cause — a deleted or missing subscription receives 0 messages."
+        if not_found else ""
+    )
+
     system = f"""Analyze these GCP {rtype} metrics.
-IMPORTANT: The alert fired because the metric is {condition_direction}.
-Identify: trend, when it deviated from normal, likely cause (e.g. publisher stopped, consumer lag, quota).
+IMPORTANT: The alert fired because the metric is {condition_direction}.{not_found_hint}
+Identify: trend, when it deviated from normal, likely cause.
 Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]"""
 
     summary = call_llm(system, compact[:2000])
