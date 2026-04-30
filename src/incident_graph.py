@@ -359,8 +359,18 @@ def fetch_metrics(state: IncidentState) -> dict:
         token = token_out.stdout.strip()
 
         import urllib.request, urllib.parse
+        # Filtra pelo recurso específico para não trazer todas as subscriptions
+        resource_label_key = {
+            "pubsub_subscription": "subscription_id",
+            "cloud_run_revision":  "service_name",
+            "cloudsql_database":   "database_id",
+        }.get(rtype, "service_name")
+        metric_filter = (
+            f'metric.type="{mtype}"'
+            f' AND resource.labels.{resource_label_key}="{service}"'
+        )
         params = urllib.parse.urlencode({
-            "filter": f'metric.type="{mtype}"',
+            "filter": metric_filter,
             "interval.startTime": start_time,
             "interval.endTime":   end_time,
             "view": "FULL",
@@ -535,7 +545,9 @@ def build_report(state: IncidentState) -> dict:
         "project":        state.get("project"),
         "alert_ts":       state.get("alert_ts"),
         "condition":      state.get("condition_name"),
-        "error_logs":     state.get("error_logs"),
+        "alert_type":     state.get("alert_type"),
+        "error_logs":     state.get("error_logs"),      # log-based alerts
+        "metrics_data":   state.get("metrics_data"),    # metric-based alerts
         "release_found":  state.get("release_found"),
         "release_id":     state.get("release_id"),
         "release_ts":     state.get("release_ts"),
@@ -546,7 +558,8 @@ def build_report(state: IncidentState) -> dict:
     system = f"""{skill}
 
 Using the incident data below, generate a concise incident report in Markdown.
-Include: Impact, Timeline, Error Pattern, Release Correlation, Recommended Action.
+For metric-based alerts use metrics_data; for log-based use error_logs.
+Include: Impact, Timeline, Error/Metric Pattern, Release Correlation, Recommended Action.
 End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
 
     report = call_llm(system, context)
