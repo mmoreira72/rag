@@ -166,7 +166,7 @@ def parse_alert(state: IncidentState) -> dict:
     }
 
 
-def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100) -> list:
+def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100, label: str = "") -> list:
     """Helper: corre gcloud logging read e devolve lista de entradas JSON."""
     cmd = [
         "gcloud", "logging", "read", filter_str,
@@ -175,9 +175,12 @@ def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100) -> list
         f"--limit={limit}",
     ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return json.loads(out.stdout or "[]")
-    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
+        results = json.loads(out.stdout or "[]")
+        print(f"  [logging:{label or 'query'}] {len(results)} entries | stderr: {out.stderr[:120] if out.stderr else 'none'}")
+        return results
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"  [logging:{label or 'query'}] ERROR: {e}")
         return []
 
 
@@ -197,24 +200,29 @@ def fetch_errors(state: IncidentState) -> dict:
 
     # Query 1 — erros gerais na janela de ±90 min
     general_logs = _run_gcloud_logging(
-        f'resource.type="cloud_run_revision"'
-        f' AND resource.labels.service_name="{service}"'
-        f' AND severity>=ERROR'
-        f' AND timestamp>="{window_start}"'
-        f' AND timestamp<="{window_end}"',
+        (
+            f'resource.type="cloud_run_revision"'
+            f' AND resource.labels.service_name="{service}"'
+            f' AND severity>=ERROR'
+            f' AND timestamp>="{window_start}"'
+            f' AND timestamp<="{window_end}"'
+        ),
         project,
+        label="general",
     )
 
-    # Query 2 — OOM / heap / memory nas últimas 4 horas
+    # Query 2 — OOM / heap nas últimas 4 horas (usa OR simples, sem parênteses aninhados)
     oom_logs = _run_gcloud_logging(
-        f'resource.type="cloud_run_revision"'
-        f' AND resource.labels.service_name="{service}"'
-        f' AND (textPayload:"heap out of memory" OR textPayload:"Allocation failed"'
-        f'      OR textPayload:"OOM" OR textPayload:"memory")'
-        f' AND timestamp>="{oom_start}"'
-        f' AND timestamp<="{window_end}"',
+        (
+            f'resource.type="cloud_run_revision"'
+            f' AND resource.labels.service_name="{service}"'
+            f' AND textPayload:"memory"'
+            f' AND timestamp>="{oom_start}"'
+            f' AND timestamp<="{window_end}"'
+        ),
         project,
         limit=20,
+        label="oom",
     )
 
     combined = json.dumps({
