@@ -154,6 +154,9 @@ local-incident:
 	@echo "Running incident graph with alert: $(abspath $(ALERT))"
 	cd src && PG_DSN="$(LOCAL_PG)" $(PY) incident_graph.py --alert "$(abspath $(ALERT))"
 
+local-graph:
+	cd src && PG_DSN="$(LOCAL_PG)" $(PY) incident_graph.py --print-graph
+
 # ---------- ollama ----------
 # MODEL pode ser sobrescrito: make ollama-pull MODEL=llama3.2:3b
 # Padrão de produção (servidor GPU): qwen2.5:14b

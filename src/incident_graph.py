@@ -426,9 +426,21 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Incident Response Graph")
-    parser.add_argument("--alert", required=True, help="Path to alert JSON file")
+    parser.add_argument("--alert", help="Path to alert JSON file")
     parser.add_argument("--thread", default="incident-1", help="Thread ID for checkpointing")
+    parser.add_argument("--print-graph", action="store_true", help="Print graph structure and exit")
     args = parser.parse_args()
+
+    if args.print_graph:
+        graph = build_graph()
+        print("\n── Mermaid ──────────────────────────────────────────────")
+        print(graph.get_graph().draw_mermaid())
+        print("\n── ASCII ────────────────────────────────────────────────")
+        graph.get_graph().print_ascii()
+        sys.exit(0)
+
+    if not args.alert:
+        parser.error("--alert is required unless --print-graph is set")
 
     alert_raw = Path(args.alert).read_text()
     graph = build_graph()
