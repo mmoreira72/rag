@@ -166,43 +166,75 @@ def parse_alert(state: IncidentState) -> dict:
     }
 
 
-def fetch_errors(state: IncidentState) -> dict:
-    """Corre gcloud logging read ±30 min à volta do alerta."""
-    skill = get_skill("gcloud logging read error logs Cloud Run service")
-
-    alert_dt = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
-    window_start = (alert_dt - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    window_end   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100) -> list:
+    """Helper: corre gcloud logging read e devolve lista de entradas JSON."""
     cmd = [
-        "gcloud", "logging", "read",
-        (
-            f'resource.type="cloud_run_revision"'
-            f' AND resource.labels.service_name="{state["service"]}"'
-            f' AND severity>=ERROR'
-            f' AND timestamp>="{window_start}"'
-            f' AND timestamp<="{window_end}"'
-        ),
-        f"--project={state['project']}",
+        "gcloud", "logging", "read", filter_str,
+        f"--project={project}",
         "--format=json",
-        "--limit=100",
+        f"--limit={limit}",
     ]
-
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        logs_raw = out.stdout or "[]"
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        logs_raw = "[]"
+        return json.loads(out.stdout or "[]")
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        return []
 
-    # Pede ao LLM para sumarizar os top erros (usa a skill de alerting)
+
+def fetch_errors(state: IncidentState) -> dict:
+    """Corre gcloud logging read com duas queries:
+    1. Erros gerais ±90 min (janela larga para capturar causa antes do sintoma)
+    2. Erros de memória/OOM nas últimas 4 horas (padrões de memory leak)
+    """
+    skill = get_skill("gcloud logging read error logs Cloud Run service")
+
+    alert_dt    = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    window_start = (alert_dt - timedelta(minutes=90)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    oom_start    = (alert_dt - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project      = state["project"]
+    service      = state["service"]
+
+    # Query 1 — erros gerais na janela de ±90 min
+    general_logs = _run_gcloud_logging(
+        f'resource.type="cloud_run_revision"'
+        f' AND resource.labels.service_name="{service}"'
+        f' AND severity>=ERROR'
+        f' AND timestamp>="{window_start}"'
+        f' AND timestamp<="{window_end}"',
+        project,
+    )
+
+    # Query 2 — OOM / heap / memory nas últimas 4 horas
+    oom_logs = _run_gcloud_logging(
+        f'resource.type="cloud_run_revision"'
+        f' AND resource.labels.service_name="{service}"'
+        f' AND (textPayload:"heap out of memory" OR textPayload:"Allocation failed"'
+        f'      OR textPayload:"OOM" OR textPayload:"memory")'
+        f' AND timestamp>="{oom_start}"'
+        f' AND timestamp<="{window_end}"',
+        project,
+        limit=20,
+    )
+
+    combined = json.dumps({
+        "general_errors": general_logs[:50],
+        "oom_errors":     oom_logs,
+    })
+
     system = f"""{skill}
 
-Summarise the top 5 error patterns from these Cloud Run logs.
-Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]
-If no errors, return []."""
+You have two sets of Cloud Run logs:
+- general_errors: errors in ±90 min around the alert
+- oom_errors: JavaScript heap/memory errors in the last 4 hours
 
-    summary = call_llm(system, logs_raw[:6000])  # cap para não encher contexto
+Identify the ROOT CAUSE (not just symptoms). If OOM errors are present and
+predate the liveness probe failures, highlight that as the root cause.
 
+Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true/false}}]
+Mark root_cause=true for the pattern that caused the others."""
+
+    summary = call_llm(system, combined[:8000])
     return {"error_logs": summary}
 
 
@@ -210,39 +242,37 @@ def check_release(state: IncidentState) -> dict:
     """Verifica se houve release no Cloud Deploy na hora anterior ao alerta."""
     skill = get_skill("Cloud Deploy release rollout history timestamp")
 
-    alert_dt = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
-    window_start = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    alert_dt     = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    window_start = (alert_dt - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project      = state["project"]
+    service      = state["service"]
+    region       = state["region"]
 
-    # TODO: substituir pelo pipeline real
-    pipeline = f"{state['service']}-pipeline"
-
+    # Cloud Run revisions (mais universal que Cloud Deploy)
     cmd = [
-        "gcloud", "deploy", "rollouts", "list",
-        f"--delivery-pipeline={pipeline}",
-        f"--region={state['region']}",
-        f"--project={state['project']}",
+        "gcloud", "run", "revisions", "list",
+        f"--service={service}",
+        f"--project={project}",
+        f"--region={region}",
         "--format=json",
-        f"--filter=deployStartTime >= {window_start} AND deployStartTime <= {state['alert_ts']}",
+        "--limit=5",
     ]
-
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        rollouts = json.loads(out.stdout or "[]")
+        revisions = json.loads(out.stdout or "[]")
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
-        rollouts = []
+        revisions = []
 
-    if rollouts:
-        latest = rollouts[0]
-        return {
-            "release_found": True,
-            "release_id":    latest.get("name", "").split("/")[-1],
-            "release_ts":    latest.get("deployStartTime", ""),
-        }
-    return {
-        "release_found": False,
-        "release_id":    "",
-        "release_ts":    "",
-    }
+    for rev in revisions:
+        created = rev.get("metadata", {}).get("creationTimestamp", "")
+        if created and window_start <= created <= state["alert_ts"]:
+            return {
+                "release_found": True,
+                "release_id":    rev.get("metadata", {}).get("name", ""),
+                "release_ts":    created,
+            }
+
+    return {"release_found": False, "release_id": "", "release_ts": ""}
 
 
 def fetch_release_logs(state: IncidentState) -> dict:
