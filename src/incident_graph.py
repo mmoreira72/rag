@@ -610,32 +610,85 @@ def build_report(state: IncidentState) -> dict:
     """Monta o relatório de incidente com toda a informação recolhida."""
     skill = get_skill("incident report template SRE post-mortem")
 
+    project    = state.get("project", "")
+    service    = state.get("service", "")
+    alert_ts   = state.get("alert_ts", "")
+    alert_url  = state.get("alert_url", "")
+    alert_type = state.get("alert_type", "log-based")
+
+    # Gera URLs reais para os links do relatório
+    try:
+        alert_dt   = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
+        ts_start   = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts_end     = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        ts_start = ts_end = ""
+
+    if alert_type == "slo-based":
+        log_url = (
+            f"https://console.cloud.google.com/monitoring/services"
+            f"/{service}?project={project}"
+        )
+    else:
+        import urllib.parse
+        log_filter = urllib.parse.quote(
+            f'resource.labels.service_name="{service}"'
+            f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
+        )
+        log_url = (
+            f"https://console.cloud.google.com/logs/query"
+            f";query={log_filter}?project={project}"
+        )
+
+    release_ts  = state.get("release_ts", "")
+    if release_ts:
+        try:
+            rel_dt     = datetime.fromisoformat(release_ts.replace("Z", "+00:00"))
+            rel_start  = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rel_end    = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            import urllib.parse as _up
+            rel_filter = _up.quote(
+                f'resource.labels.service_name="{service}"'
+                f' AND timestamp>="{rel_start}" AND timestamp<="{rel_end}"'
+            )
+            release_log_url = (
+                f"https://console.cloud.google.com/logs/query"
+                f";query={rel_filter}?project={project}"
+            )
+        except Exception:
+            release_log_url = log_url
+    else:
+        release_log_url = log_url
+
     context = json.dumps({
-        "incident_id":    state.get("incident_id"),
-        "service":        state.get("service"),
-        "project":        state.get("project"),
-        "alert_ts":       state.get("alert_ts"),
-        "condition":      state.get("condition_name"),
-        "alert_type":     state.get("alert_type"),
-        "error_logs":     state.get("error_logs"),
-        "metrics_data":   state.get("metrics_data"),
-        "release_found":  state.get("release_found"),
-        "release_type":   state.get("release_type"),    # "cloud_run" | "optimizely"
-        "release_id":     state.get("release_id"),
-        "release_ts":     state.get("release_ts"),
-        "release_logs":   state.get("release_logs"),
-        "alert_url":      state.get("alert_url"),
+        "incident_id":      state.get("incident_id"),
+        "service":          service,
+        "project":          project,
+        "alert_ts":         alert_ts,
+        "condition":        state.get("condition_name"),
+        "alert_type":       alert_type,
+        "error_logs":       state.get("error_logs"),
+        "metrics_data":     state.get("metrics_data"),
+        "release_found":    state.get("release_found"),
+        "release_type":     state.get("release_type"),
+        "release_id":       state.get("release_id"),
+        "release_ts":       release_ts,
+        "release_logs":     state.get("release_logs"),
+        "alert_url":        alert_url or f"https://console.cloud.google.com/monitoring?project={project}",
+        "log_url":          log_url,
+        "release_log_url":  release_log_url,
     }, indent=2)
 
     system = f"""{skill}
 
 Using the incident data below, generate a concise incident report in Markdown.
-For metric-based alerts use metrics_data; for log-based use error_logs.
+For metric-based/slo-based alerts use metrics_data; for log-based use error_logs.
 If release_type is "optimizely", highlight it as a FEATURE FLAG CHANGE, not a code deploy.
+Use the exact URLs provided in log_url, release_log_url, and alert_url — do NOT use placeholder variables like ${{ALERT_URL}}.
 Include: Impact, Timeline, Error/Metric Pattern, Release Correlation, Recommended Action.
 End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
 
-    report = call_llm(system, context)
+    report = call_llm(system, context[:5000])
     return {"report": report}
 
 
