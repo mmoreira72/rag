@@ -8,7 +8,7 @@ description: quando usar esta skill
 ---
 # corpo da skill em markdown...
 """
-from pathlib import Path
+import os
 from config import SKILLS_DIR
 from embeddings import embed
 from db import upsert_skill, reset_skills
@@ -46,20 +46,28 @@ def parse_skill(md_text: str):
 
 def main():
     reset_skills()
-    root = Path(SKILLS_DIR).resolve()
+    root = os.path.realpath(SKILLS_DIR)
     print(f"Ingerindo skills de: {root}")
     count = 0
-    for skill_md in root.rglob("SKILL.md"):
-        text = skill_md.read_text(encoding="utf-8")
-        name, description, body = parse_skill(text)
-        if not name:
-            name = skill_md.parent.name
-        if not description:
-            description = name
-        vec = embed([f"{name}\n{description}"])[0]
-        upsert_skill(name, description, body, vec)
-        print(f"  ✓ {name}")
-        count += 1
+    # os.walk é mais robusto que Path.rglob para nomes com caracteres especiais
+    for dirpath, _dirs, files in os.walk(root):
+        if "SKILL.md" not in files:
+            continue
+        skill_md = os.path.join(dirpath, "SKILL.md")
+        try:
+            with open(skill_md, encoding="utf-8") as f:
+                text = f.read()
+            name, description, body = parse_skill(text)
+            if not name:
+                name = os.path.basename(dirpath)
+            if not description:
+                description = name
+            vec = embed([f"{name}\n{description}"])[0]
+            upsert_skill(name, description, body, vec)
+            print(f"  ✓ {name}")
+            count += 1
+        except Exception as exc:
+            print(f"  ✗ ERRO em {skill_md}: {exc}")
     print(f"{count} skills indexadas.")
 
 
