@@ -29,20 +29,23 @@ _graph = None
 
 def _init_graph():
     global _pool, _graph
+    import psycopg
     from psycopg_pool import ConnectionPool
     from langgraph.checkpoint.postgres import PostgresSaver
     from seliga_graph import build_graph
 
-    print("[worker] conectando ao Postgres...", flush=True)
-    _pool = ConnectionPool(conninfo=PG_DSN, max_size=5)
-    _pool.wait()   # aguarda conexões estarem prontas
-
+    # setup() usa CREATE INDEX CONCURRENTLY — precisa de autocommit fora de transação
     print("[worker] configurando checkpointer LangGraph...", flush=True)
-    checkpointer = PostgresSaver(_pool)
-    checkpointer.setup()   # cria tabelas do checkpointer se não existirem
+    with psycopg.connect(PG_DSN, autocommit=True) as conn:
+        PostgresSaver(conn).setup()
+
+    # Pool normal para uso do grafo em runtime
+    print("[worker] conectando pool ao Postgres...", flush=True)
+    _pool = ConnectionPool(conninfo=PG_DSN, max_size=5)
+    _pool.wait()
 
     print("[worker] compilando grafo...", flush=True)
-    _graph = build_graph(checkpointer)
+    _graph = build_graph(PostgresSaver(_pool))
     print("[worker] grafo pronto.", flush=True)
 
 
