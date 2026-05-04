@@ -98,9 +98,18 @@ def _get_skill(query: str) -> tuple[str, str] | tuple[None, None]:
     """Devolve (name, body) da skill mais relevante ou (None, None)."""
     qvec = embed([query])[0]
     raw = search_skills(qvec, TOP_K_RETRIEVE_SKILLS)
-    if USE_RERANKER and raw:
-        raw = rerank(query, raw)
-    if not raw or raw[0][3] < SKILL_MIN_SCORE:
+    if not raw:
+        return None, None
+    if USE_RERANKER:
+        texts = [f"{s[0]}\n{s[1]}\n{s[2][:2000]}" for s in raw]
+        ranked = rerank(query, texts, top_k=1)
+        if not ranked:
+            return None, None
+        orig_idx, rscore = ranked[0]
+        if rscore < SKILL_MIN_SCORE:
+            return None, None
+        return raw[orig_idx][0], raw[orig_idx][2]
+    if raw[0][3] < SKILL_MIN_SCORE:
         return None, None
     return raw[0][0], raw[0][2]
 
