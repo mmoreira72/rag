@@ -171,17 +171,17 @@ LABEL_CAMPO = {
 }
 
 
-def _montar_pergunta(campos: list[str]) -> str:
-    labels = [LABEL_CAMPO.get(c, c) for c in campos]
-    if len(labels) == 1:
-        return f"Pode me informar o seu {labels[0]}?"
-    itens = ", ".join(labels[:-1]) + f" e {labels[-1]}"
-    return f"Para prosseguir, preciso de algumas informações: {itens}."
-
-
 def solicitar_dados(state: SeligaState) -> dict:
-    """Pede ao participante os campos faltantes via interrupt."""
-    resposta = interrupt(_montar_pergunta(state["campos_faltando"]))
+    """Pede ao participante os campos faltantes via interrupt, usando LLM para formular."""
+    labels = [LABEL_CAMPO.get(c, c) for c in state["campos_faltando"]]
+    pergunta = _call_llm(
+        "Você é um atendente virtual do programa Se Liga na SKY. "
+        "Escreva UMA mensagem curta e natural, em português, pedindo as informações listadas. "
+        "Tom: WhatsApp, amigável. Não use bullet points nem listas. Só a mensagem, sem aspas.",
+        f"O participante disse: \"{state['mensagem_participante']}\"\n"
+        f"Informações que preciso coletar: {', '.join(labels)}.",
+    )
+    resposta = interrupt(pergunta)
     dados_atualizados = {**state.get("dados", {})}
 
     # Tenta extrair os campos da resposta do participante
