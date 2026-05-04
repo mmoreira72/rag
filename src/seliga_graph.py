@@ -164,18 +164,24 @@ def coletar_dados(state: SeligaState) -> dict:
     return {"dados": dados, "campos_faltando": faltando}
 
 
+LABEL_CAMPO = {
+    "icare":          "código ICARE",
+    "cpf":            "CPF",
+    "mes_referencia": "mês de referência dos pontos",
+}
+
+
+def _montar_pergunta(campos: list[str]) -> str:
+    labels = [LABEL_CAMPO.get(c, c) for c in campos]
+    if len(labels) == 1:
+        return f"Pode me informar o seu {labels[0]}?"
+    itens = ", ".join(labels[:-1]) + f" e {labels[-1]}"
+    return f"Para prosseguir, preciso de algumas informações: {itens}."
+
+
 def solicitar_dados(state: SeligaState) -> dict:
     """Pede ao participante os campos faltantes via interrupt."""
-    perguntas = {
-        "icare":          "Pode me informar o seu código ICARE?",
-        "cpf":            "Pode me informar o seu CPF?",
-        "mes_referencia": "Os pontos de qual mês você está esperando?",
-    }
-    pergunta = " ".join(
-        perguntas.get(c, f"Pode me informar: {c}?")
-        for c in state["campos_faltando"]
-    )
-    resposta = interrupt(pergunta)
+    resposta = interrupt(_montar_pergunta(state["campos_faltando"]))
     dados_atualizados = {**state.get("dados", {})}
 
     # Tenta extrair os campos da resposta do participante
