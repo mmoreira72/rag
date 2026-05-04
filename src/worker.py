@@ -2,11 +2,10 @@
 Worker de processamento de jobs do chat.
 
 Roda como processo separado em container próprio.
-Consome jobs da fila Redis, executa RAG + LLM e grava o resultado de volta.
+Consome jobs da fila Redis, executa o LangGraph do Se Liga e grava o resultado.
 
-Um único worker serializa as chamadas ao LLM — necessário porque a GPU
-processa uma requisição por vez. Para aumentar throughput, suba mais workers
-(só faz sentido se tiver múltiplas GPUs).
+O grafo usa PostgresSaver como checkpointer — o estado de cada sessão
+(incluindo interrupts para coleta de ICARE/dados) sobrevive a reboots do worker.
 
 Uso:
     python worker.py
@@ -19,8 +18,34 @@ import signal
 import sys
 from datetime import datetime, timezone
 
-from chat import ask
+from psycopg_pool import ConnectionPool
+from langgraph.checkpoint.postgres import PostgresSaver
+from langgraph.types import Command
+
+from seliga_graph import build_graph, SeligaState
 from job_queue import dequeue, get_job, update_job
+from config import PG_DSN
+
+# ── Grafo singleton — criado uma vez, reutilizado em todos os jobs ────────────
+_pool = ConnectionPool(conninfo=PG_DSN, max_size=5, open=True)
+_checkpointer = PostgresSaver(_pool)
+_checkpointer.setup()   # cria as tabelas do checkpointer se não existirem
+_graph = build_graph(_checkpointer)
+
+
+def _graph_config(session_id: str) -> dict:
+    return {"configurable": {"thread_id": session_id}}
+
+
+def _is_interrupted(session_id: str) -> tuple[bool, str]:
+    """Retorna (está_interrompido, pergunta_do_interrupt)."""
+    config = _graph_config(session_id)
+    state = _graph.get_state(config)
+    if not state.next:
+        return False, ""
+    interrupts = state.tasks[0].interrupts if state.tasks else []
+    pergunta = interrupts[0].value if interrupts else ""
+    return True, pergunta
 
 
 def process(job_id: str) -> None:
@@ -29,21 +54,55 @@ def process(job_id: str) -> None:
         print(f"[worker] job {job_id} não encontrado (expirado?)", flush=True)
         return
 
-    print(f"[worker] processando job {job_id} | session={job['session_id']}", flush=True)
+    session_id = job["session_id"]
+    message    = job["message"]
+    print(f"[worker] processando job {job_id} | session={session_id}", flush=True)
     update_job(job_id, status="processing")
 
     try:
-        result = ask(job["session_id"], job["message"])
-        answer = result["answer"]
-        sources = json.dumps(result["sources"], ensure_ascii=False)
+        config = _graph_config(session_id)
+        interrupted, _ = _is_interrupted(session_id)
+
+        if interrupted:
+            # Sessão pausada num interrupt — retoma com a resposta do participante
+            _graph.invoke(Command(resume=message), config)
+        else:
+            # Nova conversa ou grafo já finalizado — inicia do zero
+            initial: SeligaState = {
+                "numero_atendimento":    session_id,
+                "mensagem_participante": message,
+                "skill_name": "", "skill_body": "",
+                "dados": {}, "campos_faltando": [],
+                "resposta_participante": "",
+                "escalada_id": 0,
+                "resposta_final": "",
+                "rota": "coletar",
+            }
+            _graph.invoke(initial, config)
+
+        # Lê o estado final (ou o interrupt pendente, se pede mais dados)
+        state = _graph.get_state(config)
+        still_interrupted, pergunta = _is_interrupted(session_id)
+
+        if still_interrupted:
+            # Grafo pausado — devolve a pergunta ao participante
+            answer  = pergunta
+            sources = []
+        else:
+            values  = state.values
+            answer  = values.get("resposta_final", "")
+            skill   = values.get("skill_name", "")
+            sources = [{"type": "skill", "name": skill}] if skill else []
+
         update_job(
             job_id,
             status="done",
             answer=answer,
-            sources=sources,
+            sources=json.dumps(sources, ensure_ascii=False),
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
-        print(f"[worker] job {job_id} concluído ({len(answer)} chars, {len(result['sources'])} fontes)", flush=True)
+        print(f"[worker] job {job_id} concluído | interrupted={still_interrupted}", flush=True)
+
     except Exception as exc:
         update_job(
             job_id,
@@ -71,6 +130,7 @@ def main() -> None:
         if job_id:
             process(job_id)
 
+    _pool.close()
     print("[worker] encerrado.", flush=True)
     sys.exit(0)
 

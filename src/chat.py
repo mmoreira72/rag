@@ -26,13 +26,11 @@ from config import (
 # Match real começa em ~0.6+. Exemplo empírico: mysql-perf pontuou 0.684
 # quando a pergunta era sobre queries pesadas; pontuou 0.500 quando era
 # "capital do brasil" (ruído → falso positivo com threshold antigo).
-# 0.55 para skills (vs 0.65 no branch engineering): queries do Se Liga são
-# curtas e coloquiais — o cross-encoder pontua menor nesses casos.
-SKILL_MIN_SCORE_RERANK = 0.55
+SKILL_MIN_SCORE_RERANK = 0.65
 DOC_MIN_SCORE_RERANK = 0.50
 
 # Fallback: se reranker desligado, usa thresholds de cosine (escala diferente).
-SKILL_MIN_SCORE_COS = 0.55
+SKILL_MIN_SCORE_COS = 0.65
 DOC_MIN_SCORE_COS = 0.55
 
 def _system_grounded(context: str) -> str:
@@ -40,17 +38,14 @@ def _system_grounded(context: str) -> str:
     return (
         f"Data de hoje: {today}. Use esta data como referência para qualquer cálculo de prazo.\n\n"
         "Você é um atendente virtual do programa Se Liga na SKY. "
-        "Responda ao participante de forma cordial e direta — como um atendente humano faria pelo WhatsApp.\n"
-        "As SKILLS e o CONTEXTO abaixo foram recuperados automaticamente e já estão filtrados por relevância.\n"
+        "Responda ao participante de forma cordial, direta e conversacional — como um atendente humano faria pelo WhatsApp.\n"
+        "As SKILLS e o CONTEXTO abaixo foram recuperados automaticamente e já estão filtrados por relevância. Use-os como base de conhecimento.\n"
         "REGRAS OBRIGATÓRIAS:\n"
-        "1. Quando há uma SKILL ativa, siga o procedimento dela à risca:\n"
-        "   a. Execute os passos na ordem indicada.\n"
-        "   b. Se a skill pede dados do participante (ex: ICARE, CPF, mês), PEÇA-OS antes de qualquer outra ação.\n"
-        "   c. Quando a skill define uma 'Mensagem padrão', use-a LITERALMENTE — não reescreva, não resuma, não acrescente.\n"
-        "   d. Não invente ações que não estão na skill (ex: 'vou verificar', 'só um momento') se a skill não prevê isso.\n"
-        "2. Use o CONTEXTO para complementar com informações do regulamento ou FAQ apenas quando a skill não cobre o ponto.\n"
+        "1. Use a SKILL presente como guia do que fazer e dizer — mas escreva a resposta como uma mensagem natural para o participante, "
+        "não liste os passos da skill nem repita o conteúdo interno dela.\n"
+        "2. Use o CONTEXTO para complementar com informações do regulamento, FAQ ou outros documentos quando relevante.\n"
         "3. Seja objetivo: responda o que o participante perguntou, sem introduções longas.\n"
-        "4. Tom: amigável e profissional. Não use 'só um momento' ou variações a menos que a skill indique.\n"
+        "4. Tom: amigável, como a atendente Simone nos exemplos reais — próximo, mas profissional.\n"
         "5. Responda sempre em português do Brasil.\n\n"
         + context
     )

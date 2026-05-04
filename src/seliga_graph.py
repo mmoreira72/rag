@@ -24,7 +24,8 @@ from typing import TypedDict, Literal
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.types import interrupt
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import interrupt, Command
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import LLM_BASE_URL, CHAT_MODEL, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
@@ -234,7 +235,7 @@ def route_apos_identificar(state: SeligaState) -> str:
 
 # ── Graph ────────────────────────────────────────────────────────────────────
 
-def build_graph():
+def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     g = StateGraph(SeligaState)
 
     g.add_node("identificar_skill", identificar_skill)
@@ -253,7 +254,6 @@ def build_graph():
         "solicitar_dados": "solicitar_dados",
         "escalar_sac":     "escalar_sac",
     })
-    # Após solicitar dados, volta a checar se ainda faltam campos
     g.add_conditional_edges("solicitar_dados", route_apos_coleta, {
         "solicitar_dados": "solicitar_dados",
         "escalar_sac":     "escalar_sac",
@@ -261,7 +261,7 @@ def build_graph():
     g.add_edge("escalar_sac",     "exibir_mensagem")
     g.add_edge("exibir_mensagem", END)
 
-    return g.compile(checkpointer=MemorySaver())
+    return g.compile(checkpointer=checkpointer or MemorySaver())
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -286,14 +286,19 @@ if __name__ == "__main__":
         "rota": "coletar",
     }
 
-    result = graph.invoke(state_in, config)
+    graph.invoke(state_in, config)
 
-    # Se parou num interrupt (coleta de dados faltantes), lê da stdin
-    while result.get("campos_faltando"):
-        print(f"\nAssistente: {result.get('resposta_final', '')}")
+    while True:
+        state = graph.get_state(config)
+        if not state.next:
+            break
+        interrupts = state.tasks[0].interrupts if state.tasks else []
+        pergunta = interrupts[0].value if interrupts else "Mais informações?"
+        print(f"\nAssistente: {pergunta}")
         resposta = input("Participante: ").strip()
-        result = graph.invoke({"resposta_participante": resposta}, config)
+        graph.invoke(Command(resume=resposta), config)
 
-    print(f"\nAssistente: {result['resposta_final']}")
-    if result.get("escalada_id"):
-        print(f"[escalada gravada: id={result['escalada_id']}]")
+    final = graph.get_state(config).values
+    print(f"\nAssistente: {final.get('resposta_final', '')}")
+    if final.get("escalada_id"):
+        print(f"[escalada gravada: id={final['escalada_id']}]")
