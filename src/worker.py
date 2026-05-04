@@ -18,19 +18,32 @@ import signal
 import sys
 from datetime import datetime, timezone
 
-from psycopg_pool import ConnectionPool
-from langgraph.checkpoint.postgres import PostgresSaver
-from langgraph.types import Command
-
-from seliga_graph import build_graph, SeligaState
 from job_queue import dequeue, get_job, update_job
 from config import PG_DSN
 
-# ── Grafo singleton — criado uma vez, reutilizado em todos os jobs ────────────
-_pool = ConnectionPool(conninfo=PG_DSN, max_size=5, open=True)
-_checkpointer = PostgresSaver(_pool)
-_checkpointer.setup()   # cria as tabelas do checkpointer se não existirem
-_graph = build_graph(_checkpointer)
+# Grafo e pool são inicializados dentro de main() para que erros
+# de importação ou conexão apareçam nos logs antes de qualquer job.
+_pool  = None
+_graph = None
+
+
+def _init_graph():
+    global _pool, _graph
+    from psycopg_pool import ConnectionPool
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from seliga_graph import build_graph
+
+    print("[worker] conectando ao Postgres...", flush=True)
+    _pool = ConnectionPool(conninfo=PG_DSN, max_size=5)
+    _pool.wait()   # aguarda conexões estarem prontas
+
+    print("[worker] configurando checkpointer LangGraph...", flush=True)
+    checkpointer = PostgresSaver(_pool)
+    checkpointer.setup()   # cria tabelas do checkpointer se não existirem
+
+    print("[worker] compilando grafo...", flush=True)
+    _graph = build_graph(checkpointer)
+    print("[worker] grafo pronto.", flush=True)
 
 
 def _graph_config(session_id: str) -> dict:
@@ -39,8 +52,7 @@ def _graph_config(session_id: str) -> dict:
 
 def _is_interrupted(session_id: str) -> tuple[bool, str]:
     """Retorna (está_interrompido, pergunta_do_interrupt)."""
-    config = _graph_config(session_id)
-    state = _graph.get_state(config)
+    state = _graph.get_state(_graph_config(session_id))
     if not state.next:
         return False, ""
     interrupts = state.tasks[0].interrupts if state.tasks else []
@@ -49,6 +61,9 @@ def _is_interrupted(session_id: str) -> tuple[bool, str]:
 
 
 def process(job_id: str) -> None:
+    from langgraph.types import Command
+    from seliga_graph import SeligaState
+
     job = get_job(job_id)
     if not job:
         print(f"[worker] job {job_id} não encontrado (expirado?)", flush=True)
@@ -64,10 +79,10 @@ def process(job_id: str) -> None:
         interrupted, _ = _is_interrupted(session_id)
 
         if interrupted:
-            # Sessão pausada num interrupt — retoma com a resposta do participante
+            # Sessão pausada — retoma com a resposta do participante
             _graph.invoke(Command(resume=message), config)
         else:
-            # Nova conversa ou grafo já finalizado — inicia do zero
+            # Nova conversa ou grafo finalizado — inicia do zero
             initial: SeligaState = {
                 "numero_atendimento":    session_id,
                 "mensagem_participante": message,
@@ -80,16 +95,13 @@ def process(job_id: str) -> None:
             }
             _graph.invoke(initial, config)
 
-        # Lê o estado final (ou o interrupt pendente, se pede mais dados)
-        state = _graph.get_state(config)
         still_interrupted, pergunta = _is_interrupted(session_id)
 
         if still_interrupted:
-            # Grafo pausado — devolve a pergunta ao participante
             answer  = pergunta
             sources = []
         else:
-            values  = state.values
+            values  = _graph.get_state(config).values
             answer  = values.get("resposta_final", "")
             skill   = values.get("skill_name", "")
             sources = [{"type": "skill", "name": skill}] if skill else []
@@ -104,6 +116,8 @@ def process(job_id: str) -> None:
         print(f"[worker] job {job_id} concluído | interrupted={still_interrupted}", flush=True)
 
     except Exception as exc:
+        import traceback
+        traceback.print_exc()
         update_job(
             job_id,
             status="error",
@@ -114,12 +128,18 @@ def process(job_id: str) -> None:
 
 
 def main() -> None:
-    print("[worker] iniciando — aguardando jobs...", flush=True)
+    try:
+        _init_graph()
+    except Exception as exc:
+        print(f"[worker] ERRO FATAL na inicialização: {exc}", flush=True)
+        sys.exit(1)
+
+    print("[worker] aguardando jobs...", flush=True)
     running = True
 
     def shutdown(sig, _frame):
         nonlocal running
-        print(f"[worker] sinal {sig} recebido — encerrando após job atual...", flush=True)
+        print(f"[worker] sinal {sig} — encerrando após job atual...", flush=True)
         running = False
 
     signal.signal(signal.SIGTERM, shutdown)
