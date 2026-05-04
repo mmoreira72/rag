@@ -29,7 +29,7 @@ from langgraph.types import interrupt, Command
 
 sys.path.insert(0, str(Path(__file__).parent))
 from config import LLM_BASE_URL, CHAT_MODEL, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
-from db import search_skills, insert_escalada, mark_escalada_sent, mark_escalada_failed
+from db import search_skills, insert_escalada
 from embeddings import embed
 from reranker import rerank
 
@@ -201,7 +201,11 @@ def solicitar_dados(state: SeligaState) -> dict:
 
 
 def escalar_sac(state: SeligaState) -> dict:
-    """Grava a escalada no banco e marca como sent (API a ser integrada)."""
+    """Grava a escalada como pending e retorna a mensagem ao participante.
+
+    O envio para o SAC é feito por worker externo que lê get_pending_escaladas()
+    e chama a API quando disponível.
+    """
     body = {
         "skill":    state["skill_name"],
         "mensagem": state["mensagem_participante"],
@@ -213,10 +217,6 @@ def escalar_sac(state: SeligaState) -> dict:
         icare=state.get("dados", {}).get("icare"),
         body=body,
     )
-    # TODO: chamar API do serviço terceiro aqui quando disponível.
-    # Por ora marca como sent direto (worker externo vai processar via get_pending_escaladas).
-    mark_escalada_sent(escalada_id)
-
     return {
         "escalada_id": escalada_id,
         "resposta_final": MENSAGEM_ENCAMINHAMENTO,
