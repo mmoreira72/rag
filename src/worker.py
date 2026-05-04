@@ -89,7 +89,7 @@ def process(job_id: str) -> None:
             initial: SeligaState = {
                 "numero_atendimento":    session_id,
                 "mensagem_participante": message,
-                "skill_name": "", "skill_body": "",
+                "skill_name": "", "skill_body": "", "skill_score": 0.0,
                 "dados": {}, "campos_faltando": [],
                 "resposta_participante": "",
                 "escalada_id": 0,
@@ -107,7 +107,8 @@ def process(job_id: str) -> None:
             values  = _graph.get_state(config).values
             answer  = values.get("resposta_final", "")
             skill   = values.get("skill_name", "")
-            sources = [{"type": "skill", "name": skill}] if skill else []
+            score   = values.get("skill_score", 0.0)
+            sources = [{"type": "skill", "name": skill, "score": score}] if skill else []
 
         update_job(
             job_id,

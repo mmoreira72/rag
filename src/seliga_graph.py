@@ -72,6 +72,7 @@ class SeligaState(TypedDict):
 
     skill_name: str
     skill_body: str
+    skill_score: float
 
     # Dados coletados (icare + campos específicos da skill)
     dados: dict
@@ -94,24 +95,25 @@ class SeligaState(TypedDict):
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_skill(query: str) -> tuple[str, str] | tuple[None, None]:
-    """Devolve (name, body) da skill mais relevante ou (None, None)."""
+def _get_skill(query: str) -> tuple[str, str, float] | tuple[None, None, float]:
+    """Devolve (name, body, score) da skill mais relevante ou (None, None, 0.0)."""
     qvec = embed([query])[0]
     raw = search_skills(qvec, TOP_K_RETRIEVE_SKILLS)
     if not raw:
-        return None, None
+        return None, None, 0.0
     if USE_RERANKER:
         texts = [f"{s[0]}\n{s[1]}\n{s[2][:2000]}" for s in raw]
         ranked = rerank(query, texts, top_k=1)
         if not ranked:
-            return None, None
+            return None, None, 0.0
         orig_idx, rscore = ranked[0]
         if rscore < SKILL_MIN_SCORE:
-            return None, None
-        return raw[orig_idx][0], raw[orig_idx][2]
-    if raw[0][3] < SKILL_MIN_SCORE:
-        return None, None
-    return raw[0][0], raw[0][2]
+            return None, None, rscore
+        return raw[orig_idx][0], raw[orig_idx][2], rscore
+    score = raw[0][3]
+    if score < SKILL_MIN_SCORE:
+        return None, None, score
+    return raw[0][0], raw[0][2], score
 
 
 def _call_llm(system: str, user: str) -> str:
@@ -125,18 +127,19 @@ def _call_llm(system: str, user: str) -> str:
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
 def identificar_skill(state: SeligaState) -> dict:
-    name, body = _get_skill(state["mensagem_participante"])
+    name, body, score = _get_skill(state["mensagem_participante"])
     if not name:
         return {
             "skill_name": "",
             "skill_body": "",
+            "skill_score": round(score, 4),
             "resposta_final": (
                 "Não consegui identificar o assunto da sua solicitação. "
                 "Pode descrever melhor o que está acontecendo?"
             ),
-            "rota": "escalar",   # vai direto para END sem escalar ao SAC
+            "rota": "escalar",
         }
-    return {"skill_name": name, "skill_body": body}
+    return {"skill_name": name, "skill_body": body, "skill_score": round(score, 4)}
 
 
 def coletar_dados(state: SeligaState) -> dict:
