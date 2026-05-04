@@ -46,22 +46,17 @@ llm = ChatOpenAI(
 MENSAGEM_ENCAMINHAMENTO = (
     "Para te ajudar com esse assunto, preciso de algumas informações que só o nosso "
     "time de atendimento consegue acessar com segurança. Por isso vou encaminhar o "
-    "que conversamos para o SAC, para que possamos te atender da melhor forma possível."
+    "que conversamos para o SAC, para que possamos te atender da melhor forma possível. Posso te ajudar em mais alguma coisa?"
 )
 
-# Campos obrigatórios por skill — adicionar novas skills aqui conforme necessário.
-CAMPOS_POR_SKILL: dict[str, list[str]] = {
-    "login-bloqueado":        ["icare", "cpf"],
-    "pontos-nao-creditados":  ["icare", "mes_referencia"],
-    "antecipar-boleto":       ["icare"],
-    "opçoes-resgate":         ["icare"],
-    "pag-contas-processando": ["icare"],
-    "premio-brinde-fisico":   ["icare"],
-    "primeiro-acesso-cadastro": ["icare", "cpf"],
-    "resgate-cartao-virtual": ["icare"],
-    "resgate-pagamento-pendente": ["icare"],
-    "troca-devolucao-resgate": ["icare"],
-}
+
+def _campos_da_skill(skill_body: str) -> list[str]:
+    """Lê campos_obrigatorios injetados pelo ingest_skills no topo do body."""
+    for line in skill_body.splitlines():
+        if line.startswith("CAMPOS_OBRIGATORIOS:"):
+            raw = line.split(":", 1)[1].strip()
+            return [c.strip() for c in raw.split(",") if c.strip()]
+    return ["icare"]  # fallback conservador
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -144,7 +139,7 @@ def identificar_skill(state: SeligaState) -> dict:
 
 def coletar_dados(state: SeligaState) -> dict:
     """Usa o LLM para extrair os dados necessários da conversa."""
-    campos = CAMPOS_POR_SKILL.get(state["skill_name"], ["icare"])
+    campos = _campos_da_skill(state["skill_body"])
     prompt_sys = (
         "Você é um extrator de informações. Analise a mensagem do participante "
         "e extraia os campos listados em JSON. Use null para campos não informados."
