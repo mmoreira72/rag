@@ -26,11 +26,13 @@ from config import (
 # Match real começa em ~0.6+. Exemplo empírico: mysql-perf pontuou 0.684
 # quando a pergunta era sobre queries pesadas; pontuou 0.500 quando era
 # "capital do brasil" (ruído → falso positivo com threshold antigo).
-SKILL_MIN_SCORE_RERANK = 0.65
+# 0.55 para skills (vs 0.65 no branch engineering): queries do Se Liga são
+# curtas e coloquiais — o cross-encoder pontua menor nesses casos.
+SKILL_MIN_SCORE_RERANK = 0.55
 DOC_MIN_SCORE_RERANK = 0.50
 
 # Fallback: se reranker desligado, usa thresholds de cosine (escala diferente).
-SKILL_MIN_SCORE_COS = 0.65
+SKILL_MIN_SCORE_COS = 0.55
 DOC_MIN_SCORE_COS = 0.55
 
 def _system_grounded(context: str) -> str:
