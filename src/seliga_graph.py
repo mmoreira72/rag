@@ -59,6 +59,14 @@ def _campos_da_skill(skill_body: str) -> list[str]:
     return ["icare"]  # fallback conservador
 
 
+def _resolucao_da_skill(skill_body: str) -> str:
+    """Lê resolucao injetada pelo ingest_skills: 'autonomo' ou 'escalacao'."""
+    for line in skill_body.splitlines():
+        if line.startswith("RESOLUCAO:"):
+            return line.split(":", 1)[1].strip()
+    return "escalacao"  # fallback conservador
+
+
 # ── State ────────────────────────────────────────────────────────────────────
 
 class SeligaState(TypedDict):
@@ -227,23 +235,37 @@ def escalar_sac(state: SeligaState) -> dict:
     }
 
 
+def responder_direto(state: SeligaState) -> dict:
+    """Skills autonomo: LLM responde com base no conteúdo da skill, sem escalar."""
+    resposta = _call_llm(
+        "Você é um atendente virtual do programa Se Liga na SKY. "
+        "Use a skill abaixo para responder ao participante de forma natural e amigável, "
+        "como uma mensagem de WhatsApp. Seja direto e objetivo. "
+        "Responda sempre em português do Brasil.",
+        f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
+        f"Conteúdo da skill:\n{state['skill_body']}",
+    )
+    return {"resposta_final": resposta}
+
+
 def exibir_mensagem(state: SeligaState) -> dict:
     return {}   # resposta_final já está no state; nó terminal de saída
 
 
 # ── Routing ──────────────────────────────────────────────────────────────────
 
+def route_apos_identificar(state: SeligaState) -> str:
+    if not state.get("skill_name"):
+        return "exibir_mensagem"
+    if _resolucao_da_skill(state["skill_body"]) == "autonomo":
+        return "responder_direto"
+    return "coletar_dados"
+
+
 def route_apos_coleta(state: SeligaState) -> str:
     if state.get("campos_faltando"):
         return "solicitar_dados"
     return "escalar_sac"
-
-
-def route_apos_identificar(state: SeligaState) -> str:
-    # Se skill não encontrada, resposta_final já está definida — vai direto ao fim
-    if not state.get("skill_name"):
-        return "exibir_mensagem"
-    return "coletar_dados"
 
 
 # ── Graph ────────────────────────────────────────────────────────────────────
@@ -255,13 +277,15 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     g.add_node("coletar_dados",     coletar_dados)
     g.add_node("solicitar_dados",   solicitar_dados)
     g.add_node("escalar_sac",       escalar_sac)
+    g.add_node("responder_direto",  responder_direto)
     g.add_node("exibir_mensagem",   exibir_mensagem)
 
     g.set_entry_point("identificar_skill")
 
     g.add_conditional_edges("identificar_skill", route_apos_identificar, {
-        "coletar_dados":   "coletar_dados",
-        "exibir_mensagem": "exibir_mensagem",
+        "coletar_dados":    "coletar_dados",
+        "responder_direto": "responder_direto",
+        "exibir_mensagem":  "exibir_mensagem",
     })
     g.add_conditional_edges("coletar_dados", route_apos_coleta, {
         "solicitar_dados": "solicitar_dados",
@@ -271,8 +295,9 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
         "solicitar_dados": "solicitar_dados",
         "escalar_sac":     "escalar_sac",
     })
-    g.add_edge("escalar_sac",     "exibir_mensagem")
-    g.add_edge("exibir_mensagem", END)
+    g.add_edge("responder_direto", "exibir_mensagem")
+    g.add_edge("escalar_sac",      "exibir_mensagem")
+    g.add_edge("exibir_mensagem",  END)
 
     return g.compile(checkpointer=checkpointer or MemorySaver())
 

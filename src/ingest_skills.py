@@ -15,7 +15,7 @@ from db import upsert_skill, reset_skills
 
 
 def parse_skill(md_text: str):
-    name, description, campos, body = None, None, None, md_text
+    name, description, campos, resolucao, body = None, None, None, None, md_text
     if md_text.startswith("---"):
         end = md_text.find("---", 3)
         if end != -1:
@@ -30,10 +30,17 @@ def parse_skill(md_text: str):
                     elif k == "description":
                         description = v
                     elif k == "campos_obrigatorios":
-                        campos = v  # ex: "icare, cpf" ou ""
-    # Injeta campos_obrigatorios no topo do body para o grafo ler em runtime
+                        campos = v
+                    elif k == "resolucao":
+                        resolucao = v  # "autonomo" ou "escalacao"
+    # Injeta metadados no topo do body para o grafo ler em runtime
+    prefix = ""
     if campos is not None:
-        body = f"CAMPOS_OBRIGATORIOS: {campos}\n\n" + body
+        prefix += f"CAMPOS_OBRIGATORIOS: {campos}\n"
+    if resolucao is not None:
+        prefix += f"RESOLUCAO: {resolucao}\n"
+    if prefix:
+        body = prefix + "\n" + body
     return name, description, body
 
 
