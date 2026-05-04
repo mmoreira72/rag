@@ -136,3 +136,59 @@ def search_skills(query_embedding, k):
             (qv, qv, k),
         )
         return cur.fetchall()
+
+
+def insert_escalada(numero_atendimento: str, skill_name: str, icare: str | None, body: dict) -> int:
+    """Grava uma escalada pendente; retorna o id gerado."""
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO escaladas (numero_atendimento, skill_name, icare, body)
+            VALUES (%s, %s, %s, %s::jsonb)
+            RETURNING id
+            """,
+            (numero_atendimento, skill_name, icare, json.dumps(body)),
+        )
+        escalada_id = cur.fetchone()[0]
+        conn.commit()
+        return escalada_id
+
+
+def mark_escalada_sent(escalada_id: int) -> None:
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE escaladas
+               SET status = 'sent', processed_at = now()
+             WHERE id = %s
+            """,
+            (escalada_id,),
+        )
+        conn.commit()
+
+
+def mark_escalada_failed(escalada_id: int) -> None:
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE escaladas
+               SET status = 'failed', processed_at = now()
+             WHERE id = %s
+            """,
+            (escalada_id,),
+        )
+        conn.commit()
+
+
+def get_pending_escaladas() -> list:
+    """Retorna todas as escaladas com status=pending (para o worker)."""
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, numero_atendimento, skill_name, icare, body, created_at
+              FROM escaladas
+             WHERE status = 'pending'
+             ORDER BY created_at
+            """
+        )
+        return cur.fetchall()
