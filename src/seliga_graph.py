@@ -1,14 +1,18 @@
 """
 Se Liga — Atendimento Graph (LangGraph).
 
-Workflow:
-  identificar_skill        (RAG: qual skill se aplica à mensagem do participante)
-       ↓
-  coletar_dados            (LLM extrai ICARE + campos específicos da skill)
-       ├─ dados incompletos ──▶ solicitar_dados  ──▶ (interrupt: aguarda participante)
-       └─ dados completos  ──────────────────────▶ escaldar_sac
-                                                         ↓
-                                                  exibir_mensagem    (resposta final)
+Workflow por tipo de resolucao (lido do SKILL.md):
+
+  autonomo:
+    identificar_skill → responder_direto → exibir_mensagem
+
+  guiado:
+    identificar_skill → tentar_resolver (LLM orienta + interrupt aguarda participante)
+        ├─ resolveu   ──▶ exibir_mensagem
+        └─ não resolveu ─▶ coletar_dados → solicitar_dados → escalar_sac → exibir_mensagem
+
+  escalacao (fallback):
+    identificar_skill → coletar_dados → solicitar_dados → escalar_sac → exibir_mensagem
 
 Uso:
     python src/seliga_graph.py --atendimento "AT-12345" --mensagem "meu login está bloqueado"
@@ -83,8 +87,11 @@ class SeligaState(TypedDict):
     # Campos ainda faltando para escalar
     campos_faltando: list[str]
 
-    # Resposta do participante após interrupt (coleta de dados faltantes)
+    # Resposta do participante após interrupt
     resposta_participante: str
+
+    # Fluxo guiado: participante resolveu sozinho após orientação?
+    guiado_resolvido: bool
 
     # ID da escalada gravada no banco
     escalada_id: int
@@ -248,6 +255,37 @@ def responder_direto(state: SeligaState) -> dict:
     return {"resposta_final": resposta}
 
 
+def tentar_resolver(state: SeligaState) -> dict:
+    """Skills guiado: orienta o participante e verifica se resolveu.
+
+    Passo 1: LLM gera orientação baseada na skill e pergunta se resolveu.
+    Passo 2: interrupt aguarda resposta do participante.
+    Passo 3: LLM classifica se resolveu ou precisa de escalada.
+    """
+    orientacao = _call_llm(
+        "Você é um atendente virtual do Se Liga na SKY. "
+        "Use a seção 'Orientação inicial' da skill para guiar o participante de forma clara, "
+        "como uma mensagem de WhatsApp. Ao final, pergunte brevemente se conseguiu resolver. "
+        "Tom: amigável, direto. Responda em português do Brasil.",
+        f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
+        f"Conteúdo da skill:\n{state['skill_body']}",
+    )
+    resposta_usuario = interrupt(orientacao)
+
+    # Classifica se o participante resolveu ou ainda precisa de ajuda
+    classificacao = _call_llm(
+        "Classifique a resposta do participante após receber uma orientação. "
+        "Responda APENAS com uma palavra: RESOLVIDO ou AJUDA",
+        f"Resposta do participante: \"{resposta_usuario}\"",
+    )
+    resolvido = "RESOLVIDO" in classificacao.upper()
+    return {
+        "resposta_participante": resposta_usuario,
+        "guiado_resolvido": resolvido,
+        "resposta_final": "Fico feliz que tenha conseguido! Se precisar de mais alguma coisa, é só chamar." if resolvido else "",
+    }
+
+
 def exibir_mensagem(state: SeligaState) -> dict:
     return {}   # resposta_final já está no state; nó terminal de saída
 
@@ -257,8 +295,17 @@ def exibir_mensagem(state: SeligaState) -> dict:
 def route_apos_identificar(state: SeligaState) -> str:
     if not state.get("skill_name"):
         return "exibir_mensagem"
-    if _resolucao_da_skill(state["skill_body"]) == "autonomo":
+    resolucao = _resolucao_da_skill(state["skill_body"])
+    if resolucao == "autonomo":
         return "responder_direto"
+    if resolucao == "guiado":
+        return "tentar_resolver"
+    return "coletar_dados"
+
+
+def route_apos_tentativa(state: SeligaState) -> str:
+    if state.get("guiado_resolvido"):
+        return "exibir_mensagem"
     return "coletar_dados"
 
 
@@ -274,6 +321,7 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     g = StateGraph(SeligaState)
 
     g.add_node("identificar_skill", identificar_skill)
+    g.add_node("tentar_resolver",   tentar_resolver)
     g.add_node("coletar_dados",     coletar_dados)
     g.add_node("solicitar_dados",   solicitar_dados)
     g.add_node("escalar_sac",       escalar_sac)
@@ -283,9 +331,14 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     g.set_entry_point("identificar_skill")
 
     g.add_conditional_edges("identificar_skill", route_apos_identificar, {
+        "tentar_resolver":  "tentar_resolver",
         "coletar_dados":    "coletar_dados",
         "responder_direto": "responder_direto",
         "exibir_mensagem":  "exibir_mensagem",
+    })
+    g.add_conditional_edges("tentar_resolver", route_apos_tentativa, {
+        "exibir_mensagem": "exibir_mensagem",
+        "coletar_dados":   "coletar_dados",
     })
     g.add_conditional_edges("coletar_dados", route_apos_coleta, {
         "solicitar_dados": "solicitar_dados",

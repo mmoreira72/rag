@@ -92,6 +92,7 @@ def process(job_id: str) -> None:
                 "skill_name": "", "skill_body": "", "skill_score": 0.0,
                 "dados": {}, "campos_faltando": [],
                 "resposta_participante": "",
+                "guiado_resolvido": False,
                 "escalada_id": 0,
                 "resposta_final": "",
                 "rota": "coletar",
