@@ -32,8 +32,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import interrupt, Command
 
 sys.path.insert(0, str(Path(__file__).parent))
-from config import LLM_BASE_URL, CHAT_MODEL, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
-from db import search_skills, insert_escalada
+from config import LLM_BASE_URL, CHAT_MODEL, TOP_K_RETRIEVE_SKILLS, TOP_K_RETRIEVE_DOCS, TOP_K_DOCS, USE_RERANKER
+from db import search_skills, search_documents, insert_escalada
 from embeddings import embed
 from reranker import rerank
 
@@ -95,6 +95,9 @@ class SeligaState(TypedDict):
 
     # ID da escalada gravada no banco
     escalada_id: int
+
+    # Contexto de documentos (fallback quando sem skill)
+    docs_contexto: str
 
     # Mensagem final para o participante
     resposta_final: str
@@ -286,6 +289,39 @@ def tentar_resolver(state: SeligaState) -> dict:
     }
 
 
+def buscar_documentos(state: SeligaState) -> dict:
+    """Fallback autônomo: busca documentos quando nenhuma skill cobre a pergunta."""
+    DOC_MIN_SCORE = 0.50
+    qvec = embed([state["mensagem_participante"]])[0]
+    raw = search_documents(qvec, TOP_K_RETRIEVE_DOCS)
+    docs = [d for d in raw[:TOP_K_DOCS] if d[3] >= DOC_MIN_SCORE]
+    if not docs:
+        return {
+            "docs_contexto": "",
+            "resposta_final": (
+                "Não encontrei informações sobre esse assunto na minha base de conhecimento. "
+                "Pode descrever melhor o que está acontecendo?"
+            ),
+        }
+    contexto = "\n\n".join(
+        f"--- {src} (score {score:.2f}) ---\n{content}"
+        for src, _idx, content, score in docs
+    )
+    return {"docs_contexto": contexto}
+
+
+def responder_com_docs(state: SeligaState) -> dict:
+    """Responde usando contexto de documentos (FAQ, Regulamento, etc.)."""
+    resposta = _call_llm(
+        "Você é um atendente virtual do programa Se Liga na SKY. "
+        "Use o contexto abaixo para responder ao participante de forma natural e amigável, "
+        "como uma mensagem de WhatsApp. Seja objetivo. Responda em português do Brasil.",
+        f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
+        f"Contexto:\n{state['docs_contexto']}",
+    )
+    return {"resposta_final": resposta}
+
+
 def exibir_mensagem(state: SeligaState) -> dict:
     return {}   # resposta_final já está no state; nó terminal de saída
 
@@ -294,13 +330,19 @@ def exibir_mensagem(state: SeligaState) -> dict:
 
 def route_apos_identificar(state: SeligaState) -> str:
     if not state.get("skill_name"):
-        return "exibir_mensagem"
+        return "buscar_documentos"
     resolucao = _resolucao_da_skill(state["skill_body"])
     if resolucao == "autonomo":
         return "responder_direto"
     if resolucao == "guiado":
         return "tentar_resolver"
     return "coletar_dados"
+
+
+def route_apos_documentos(state: SeligaState) -> str:
+    if state.get("docs_contexto"):
+        return "responder_com_docs"
+    return "exibir_mensagem"
 
 
 def route_apos_tentativa(state: SeligaState) -> str:
@@ -320,22 +362,29 @@ def route_apos_coleta(state: SeligaState) -> str:
 def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     g = StateGraph(SeligaState)
 
-    g.add_node("identificar_skill", identificar_skill)
-    g.add_node("tentar_resolver",   tentar_resolver)
-    g.add_node("coletar_dados",     coletar_dados)
-    g.add_node("solicitar_dados",   solicitar_dados)
-    g.add_node("escalar_sac",       escalar_sac)
-    g.add_node("responder_direto",  responder_direto)
-    g.add_node("exibir_mensagem",   exibir_mensagem)
+    g.add_node("identificar_skill",  identificar_skill)
+    g.add_node("buscar_documentos",  buscar_documentos)
+    g.add_node("responder_com_docs", responder_com_docs)
+    g.add_node("tentar_resolver",    tentar_resolver)
+    g.add_node("coletar_dados",      coletar_dados)
+    g.add_node("solicitar_dados",    solicitar_dados)
+    g.add_node("escalar_sac",        escalar_sac)
+    g.add_node("responder_direto",   responder_direto)
+    g.add_node("exibir_mensagem",    exibir_mensagem)
 
     g.set_entry_point("identificar_skill")
 
     g.add_conditional_edges("identificar_skill", route_apos_identificar, {
-        "tentar_resolver":  "tentar_resolver",
-        "coletar_dados":    "coletar_dados",
-        "responder_direto": "responder_direto",
-        "exibir_mensagem":  "exibir_mensagem",
+        "buscar_documentos": "buscar_documentos",
+        "tentar_resolver":   "tentar_resolver",
+        "coletar_dados":     "coletar_dados",
+        "responder_direto":  "responder_direto",
     })
+    g.add_conditional_edges("buscar_documentos", route_apos_documentos, {
+        "responder_com_docs": "responder_com_docs",
+        "exibir_mensagem":    "exibir_mensagem",
+    })
+    g.add_edge("responder_com_docs", "exibir_mensagem")
     g.add_conditional_edges("tentar_resolver", route_apos_tentativa, {
         "exibir_mensagem": "exibir_mensagem",
         "coletar_dados":   "coletar_dados",

@@ -94,6 +94,7 @@ def process(job_id: str) -> None:
                 "resposta_participante": "",
                 "guiado_resolvido": False,
                 "escalada_id": 0,
+                "docs_contexto": "",
                 "resposta_final": "",
                 "rota": "coletar",
             }
