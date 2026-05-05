@@ -47,6 +47,12 @@ llm = ChatOpenAI(
     max_tokens=1024,
 )
 
+_IDENTIDADE = (
+    "Você é um atendente virtual do programa Se Liga na SKY — um programa de INCENTIVO "
+    "E PONTUAÇÃO para colaboradores. NÃO é um serviço de telecomunicações. Não pergunte "
+    "sobre operadora, contrato de telefonia, linha, plano ou serviço de TV. "
+)
+
 MENSAGEM_ENCAMINHAMENTO = (
     "Para te ajudar com esse assunto, preciso de algumas informações que só o nosso "
     "time de atendimento consegue acessar com segurança. Por isso vou encaminhar o "
@@ -188,8 +194,8 @@ def solicitar_dados(state: SeligaState) -> dict:
     """Pede ao participante os campos faltantes via interrupt, usando LLM para formular."""
     labels = [LABEL_CAMPO.get(c, c) for c in state["campos_faltando"]]
     pergunta = _call_llm(
-        "Você é um atendente virtual do programa Se Liga na SKY. "
-        "Escreva UMA mensagem curta e natural, em português, pedindo as informações listadas. "
+        _IDENTIDADE
+        + "Escreva UMA mensagem curta e natural, em português, pedindo as informações listadas. "
         "Tom: WhatsApp, amigável. Não use bullet points nem listas. Só a mensagem, sem aspas.",
         f"O participante disse: \"{state['mensagem_participante']}\"\n"
         f"Informações que preciso coletar: {', '.join(labels)}.",
@@ -248,8 +254,8 @@ def escalar_sac(state: SeligaState) -> dict:
 def responder_direto(state: SeligaState) -> dict:
     """Skills autonomo: LLM responde com base no conteúdo da skill, sem escalar."""
     resposta = _call_llm(
-        "Você é um atendente virtual do programa Se Liga na SKY. "
-        "Use a skill abaixo para responder ao participante de forma natural e amigável, "
+        _IDENTIDADE
+        + "Use a skill abaixo para responder ao participante de forma natural e amigável, "
         "como uma mensagem de WhatsApp. Seja direto e objetivo. "
         "Responda sempre em português do Brasil.",
         f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
@@ -266,8 +272,8 @@ def tentar_resolver(state: SeligaState) -> dict:
     Passo 3: LLM classifica se resolveu ou precisa de escalada.
     """
     orientacao = _call_llm(
-        "Você é um atendente virtual do Se Liga na SKY. "
-        "Use a seção 'Orientação inicial' da skill para guiar o participante de forma clara, "
+        _IDENTIDADE
+        + "Use a seção 'Orientação inicial' da skill para guiar o participante de forma clara, "
         "como uma mensagem de WhatsApp. Ao final, pergunte brevemente se conseguiu resolver. "
         "Tom: amigável, direto. Responda em português do Brasil.",
         f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
@@ -313,8 +319,8 @@ def buscar_documentos(state: SeligaState) -> dict:
 def responder_com_docs(state: SeligaState) -> dict:
     """Responde usando contexto de documentos (FAQ, Regulamento, etc.)."""
     resposta = _call_llm(
-        "Você é um atendente virtual do programa Se Liga na SKY. "
-        "Use o contexto abaixo para responder ao participante de forma natural e amigável, "
+        _IDENTIDADE
+        + "Use o contexto abaixo para responder ao participante de forma natural e amigável, "
         "como uma mensagem de WhatsApp. Seja objetivo. Responda em português do Brasil.",
         f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
         f"Contexto:\n{state['docs_contexto']}",
