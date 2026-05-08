@@ -19,6 +19,11 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 # Produção (servidor GPU): qwen2.5:14b
 CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-3-4b")
 
+# Modelos a pré-carregar na VRAM no startup (comma-separated).
+# Exemplo: WARMUP_MODELS=qwen2.5:14b,devstral:latest
+_warmup_env = os.getenv("WARMUP_MODELS", CHAT_MODEL)
+WARMUP_MODELS: list[str] = [m.strip() for m in _warmup_env.split(",") if m.strip()]
+
 # Embedding model — roda em Python local via sentence-transformers.
 # BGE-M3 é multilingual (forte em PT-BR) e tem 1024 dim.
 # Primeira execução baixa ~2GB do HuggingFace.

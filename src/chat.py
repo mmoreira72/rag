@@ -27,7 +27,7 @@ from config import (
 # quando a pergunta era sobre queries pesadas; pontuou 0.500 quando era
 # "capital do brasil" (ruído → falso positivo com threshold antigo).
 SKILL_MIN_SCORE_RERANK = 0.65
-DOC_MIN_SCORE_RERANK = 0.50
+DOC_MIN_SCORE_RERANK = 0.55
 
 # Fallback: se reranker desligado, usa thresholds de cosine (escala diferente).
 SKILL_MIN_SCORE_COS = 0.65
@@ -37,7 +37,8 @@ def _system_grounded(context: str) -> str:
     today = date.today().strftime("%d/%m/%Y")
     return (
         f"Data de hoje: {today}. Use esta data como referência para qualquer cálculo de prazo.\n\n"
-        "Você é um atendente virtual do programa Se Liga na SKY. "
+        "Você é um atendente virtual do programa Se Liga na SKY — um programa de INCENTIVO E PONTUAÇÃO para colaboradores. "
+        "NÃO é um serviço de telecomunicações. Não pergunte sobre operadora, contrato de telefonia, linha, plano ou serviço de TV.\n"
         "Responda ao participante de forma cordial, direta e conversacional — como um atendente humano faria pelo WhatsApp.\n"
         "As SKILLS e o CONTEXTO abaixo foram recuperados automaticamente e já estão filtrados por relevância. Use-os como base de conhecimento.\n"
         "REGRAS OBRIGATÓRIAS:\n"
@@ -46,7 +47,9 @@ def _system_grounded(context: str) -> str:
         "2. Use o CONTEXTO para complementar com informações do regulamento, FAQ ou outros documentos quando relevante.\n"
         "3. Seja objetivo: responda o que o participante perguntou, sem introduções longas.\n"
         "4. Tom: amigável, como a atendente Simone nos exemplos reais — próximo, mas profissional.\n"
-        "5. Responda sempre em português do Brasil.\n\n"
+        "5. Responda sempre em português do Brasil.\n"
+        "6. CRÍTICO: se a pergunta do participante não tiver relação com o conteúdo das SKILLS ou do CONTEXTO acima, "
+        "responda APENAS: \"Não posso responder pois não está na minha base de dados.\" — sem adicionar nada mais.\n\n"
         + context
     )
 
@@ -172,12 +175,22 @@ def ask(session_id: str, question: str) -> dict:
     TTL da sessão: SESSION_TTL_MINUTES (default 30 min de inatividade).
     """
     history = get_session_history(session_id)
-    context, docs, skills = build_context(question)
+
+    # Augmenta a query de RAG com a última mensagem do usuário no histórico.
+    # Follow-ups em WhatsApp são sempre curtos e contextuais ("Diz que a senha
+    # está errada") — sem o turno anterior a busca vetorial não encontra a skill.
+    rag_query = question
+    if history:
+        last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
+        if last_user:
+            rag_query = f"{last_user} {question}"
+
+    context, docs, skills = build_context(rag_query)
     grounded = bool(skills) or bool(docs)
 
     # Sem contexto relevante → resposta determinística, sem chamar o LLM.
     if not grounded:
-        answer = "Não sei"
+        answer = "No momento, não encontrei informações disponíveis sobre esse tema na minha base de dados. Posso ajudar com outro assunto?"
         save_session_history(session_id, (history + [
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},

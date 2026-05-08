@@ -36,14 +36,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- Requer pg_cron ou chamada manual via VACUUM/DELETE periódico.
 -- Por ora a limpeza é feita on-read em get_session_history.
 
--- Tabela de escaladas ao SAC (padrão outbox — desacopla o LangGraph da API do serviço terceiro).
--- O LangGraph grava aqui; um worker (ou webhook) lê os registros 'pending' e chama a API.
+-- Outbox para escaladas ao SAC — LangGraph grava pending, worker externo consome e chama a API.
 CREATE TABLE IF NOT EXISTS escaladas (
     id                 BIGSERIAL PRIMARY KEY,
-    numero_atendimento TEXT        NOT NULL,           -- ID do atendimento no serviço terceiro
-    skill_name         TEXT        NOT NULL,           -- skill que disparou a escalada
-    icare              TEXT,                           -- identificador do participante
-    body               JSONB       NOT NULL,           -- dados coletados (varia por skill)
+    numero_atendimento TEXT        NOT NULL,
+    skill_name         TEXT        NOT NULL,
+    icare              TEXT,
+    body               JSONB       NOT NULL,
     status             TEXT        NOT NULL DEFAULT 'pending'
                                    CHECK (status IN ('pending', 'sent', 'failed')),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),

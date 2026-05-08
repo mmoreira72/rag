@@ -25,6 +25,7 @@ from config import API_KEY
 from db import delete_session
 from embeddings import embed
 from job_queue import enqueue, get_job
+from llm_client import warmup_llm_models
 from reranker import _get_reranker
 
 _api_key_header = APIKeyHeader(name="X-API-Key")
@@ -45,6 +46,7 @@ async def lifespan(app: FastAPI):
     embed(["warmup"])
     print("[startup] pré-carregando reranker...", flush=True)
     _get_reranker()
+    warmup_llm_models()
     print("[startup] modelos prontos.", flush=True)
     yield
 

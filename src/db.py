@@ -157,11 +157,7 @@ def insert_escalada(numero_atendimento: str, skill_name: str, icare: str | None,
 def mark_escalada_sent(escalada_id: int) -> None:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
-            """
-            UPDATE escaladas
-               SET status = 'sent', processed_at = now()
-             WHERE id = %s
-            """,
+            "UPDATE escaladas SET status = 'sent', processed_at = now() WHERE id = %s",
             (escalada_id,),
         )
         conn.commit()
@@ -170,18 +166,14 @@ def mark_escalada_sent(escalada_id: int) -> None:
 def mark_escalada_failed(escalada_id: int) -> None:
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
-            """
-            UPDATE escaladas
-               SET status = 'failed', processed_at = now()
-             WHERE id = %s
-            """,
+            "UPDATE escaladas SET status = 'failed', processed_at = now() WHERE id = %s",
             (escalada_id,),
         )
         conn.commit()
 
 
 def get_pending_escaladas() -> list:
-    """Retorna todas as escaladas com status=pending (para o worker)."""
+    """Retorna todas as escaladas com status=pending (para o worker externo)."""
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
             """

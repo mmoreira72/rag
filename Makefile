@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -44,6 +44,7 @@ help:
 	@echo "  make ollama-pull    baixa o modelo no Ollama container (servidor)"
 	@echo "  make up-server      servidor Linux CPU: stack completa com Ollama"
 	@echo "  make up-gpu         servidor Linux GPU: igual ao up-server + NVIDIA"
+	@echo "  make deploy         servidor GPU: pull + rebuild + reindexa + limpa sessões"
 	@echo ""
 	@echo "  make install        força resolução das dependências (uv)"
 	@echo "  make clean          remove caches Python"
@@ -155,6 +156,19 @@ worker-logs:
 
 worker-down:
 	docker compose stop worker && docker compose rm -f worker
+
+# ---------- deploy (servidor GPU) ----------
+# Fluxo completo: pull + rebuild + reindexa skills e docs + limpa sessões
+deploy:
+	git pull
+	docker compose -f docker-compose.yml -f docker-compose.server.yml -f docker-compose.gpu.yml up -d --build --no-deps api worker
+	@echo "Aguardando worker subir..."
+	@sleep 10
+	docker exec local-rag-worker python ingest_skills.py
+	docker exec local-rag-worker python convert_user_docs.py
+	docker exec local-rag-worker python ingest.py
+	docker exec local-rag-db psql -U rag -c "DELETE FROM sessions;"
+	@echo "Deploy concluído."
 
 # ---------- limpeza ----------
 clean:
