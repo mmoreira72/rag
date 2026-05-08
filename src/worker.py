@@ -30,11 +30,12 @@ def process(job_id: str) -> None:
         print(f"[worker] job {job_id} não encontrado (expirado?)", flush=True)
         return
 
-    print(f"[worker] processando job {job_id} | session={job['session_id']}", flush=True)
+    autenticado = job.get("autenticado", "0") == "1"
+    print(f"[worker] processando job {job_id} | session={job['session_id']} | autenticado={autenticado}", flush=True)
     update_job(job_id, status="processing")
 
     try:
-        result = ask(job["session_id"], job["message"])
+        result = ask(job["session_id"], job["message"], autenticado)
         answer = result["answer"]
         sources = json.dumps(result["sources"], ensure_ascii=False)
         update_job(

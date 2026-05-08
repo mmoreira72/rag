@@ -59,6 +59,7 @@ app = FastAPI(title="local-rag chat API", lifespan=lifespan)
 class ChatRequest(BaseModel):
     session_id: str = Field(..., description="ID único da conversa")
     message: str = Field(..., min_length=1, description="Mensagem do usuário")
+    autenticado: bool = Field(False, description="True se o participante está logado no portal")
 
 
 class ChatQueued(BaseModel):
@@ -85,7 +86,7 @@ def chat_endpoint(req: ChatRequest):
     O frontend deve fazer polling em GET /chat/status/{job_id} até status=done.
     HTTP 202 Accepted indica que o job foi aceito mas ainda não processado.
     """
-    job_id = enqueue(req.session_id, req.message)
+    job_id = enqueue(req.session_id, req.message, req.autenticado)
     return ChatQueued(job_id=job_id)
 
 

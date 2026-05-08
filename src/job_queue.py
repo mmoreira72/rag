@@ -7,7 +7,7 @@ Fluxo:
   3. Frontend faz polling em GET /chat/status/{job_id} até status=done
 
 Estrutura do job no Redis (hash):
-  chat:job:{job_id} → { job_id, session_id, message, status, answer, error, created_at, completed_at }
+  chat:job:{job_id} → { job_id, session_id, message, autenticado, status, answer, error, created_at, completed_at }
 
 Fila (list Redis):
   chat:queue → lista de job_ids (LPUSH para enfileirar, BRPOP para consumir)
@@ -28,13 +28,14 @@ def _client() -> redis.Redis:
     return redis.from_url(REDIS_URL, decode_responses=True)
 
 
-def enqueue(session_id: str, message: str) -> str:
+def enqueue(session_id: str, message: str, autenticado: bool = False) -> str:
     """Cria um job na fila e retorna o job_id."""
     job_id = str(uuid.uuid4())
     job = {
         "job_id": job_id,
         "session_id": session_id,
         "message": message,
+        "autenticado": "1" if autenticado else "0",  # Redis armazena strings
         "status": "queued",
         "answer": "",
         "sources": "",

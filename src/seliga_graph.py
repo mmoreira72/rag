@@ -79,9 +79,23 @@ def _resolucao_da_skill(skill_body: str) -> str:
 
 # ── State ────────────────────────────────────────────────────────────────────
 
+# Skills acessíveis sem login (área pública do portal)
+SKILLS_PUBLICAS = {
+    "esqueci-senha",
+    "login-bloqueado",
+    "primeiro-acesso-cadastro",
+    "saudacoes",
+    "opçoes-resgate",
+}
+
+# Documento exclusivo para usuários não autenticados
+DOC_NAO_LOGADO = "SAC - SE LIGA NA SKY - não logado"
+
+
 class SeligaState(TypedDict):
     numero_atendimento: str
     mensagem_participante: str
+    autenticado: bool
 
     skill_name: str
     skill_body: str
@@ -147,6 +161,11 @@ def _call_llm(system: str, user: str) -> str:
 
 def identificar_skill(state: SeligaState) -> dict:
     name, body, score = _get_skill(state["mensagem_participante"])
+
+    # Área pública: rejeita skills que exigem login
+    if name and not state.get("autenticado") and name not in SKILLS_PUBLICAS:
+        name, body, score = None, None, score
+
     if not name:
         return {
             "skill_name": "",
@@ -301,6 +320,10 @@ def buscar_documentos(state: SeligaState) -> dict:
     qvec = embed([state["mensagem_participante"]])[0]
     raw = search_documents(qvec, TOP_K_RETRIEVE_DOCS)
     docs = [d for d in raw[:TOP_K_DOCS] if d[3] >= DOC_MIN_SCORE]
+
+    # Área pública: usa apenas o documento de não-logado
+    if not state.get("autenticado"):
+        docs = [d for d in docs if DOC_NAO_LOGADO in d[0]]
     if not docs:
         return {
             "docs_contexto": "",

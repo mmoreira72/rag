@@ -68,7 +68,17 @@ def _system_ungrounded() -> str:
     )
 
 
-def _retrieve_and_rerank(question: str):
+SKILLS_PUBLICAS = {
+    "esqueci-senha",
+    "login-bloqueado",
+    "primeiro-acesso-cadastro",
+    "saudacoes",
+    "opçoes-resgate",
+}
+DOC_NAO_LOGADO = "SAC - SE LIGA NA SKY - não logado"
+
+
+def _retrieve_and_rerank(question: str, autenticado: bool = True):
     """
     Fluxo de duas fases:
     1. Busca vetorial (rápida, recall alto) traz TOP_K_RETRIEVE candidatos.
@@ -89,6 +99,9 @@ def _retrieve_and_rerank(question: str):
     if not USE_RERANKER:
         skills = [s for s in raw_skills[:TOP_K_SKILLS] if s[3] >= SKILL_MIN_SCORE_COS]
         docs = [d for d in raw_docs[:TOP_K_DOCS] if d[3] >= DOC_MIN_SCORE_COS]
+        if not autenticado:
+            skills = [s for s in skills if s[0] in SKILLS_PUBLICAS]
+            docs   = [d for d in docs   if DOC_NAO_LOGADO in d[0]]
         print(f"  ⏱  embed={t_embed:.2f}s  search={t_search:.2f}s")
         return skills, docs
 
@@ -102,6 +115,8 @@ def _retrieve_and_rerank(question: str):
             if rscore < SKILL_MIN_SCORE_RERANK:
                 continue
             name, desc, body, _ = raw_skills[orig_idx]
+            if not autenticado and name not in SKILLS_PUBLICAS:
+                continue
             skills.append((name, desc, body, rscore))
 
     # Rerank docs
@@ -113,6 +128,8 @@ def _retrieve_and_rerank(question: str):
             if rscore < DOC_MIN_SCORE_RERANK:
                 continue
             src, idx, content, _ = raw_docs[orig_idx]
+            if not autenticado and DOC_NAO_LOGADO not in src:
+                continue
             docs.append((src, idx, content, rscore))
     t_rerank = time.perf_counter() - t2
 
@@ -120,8 +137,8 @@ def _retrieve_and_rerank(question: str):
     return skills, docs
 
 
-def build_context(question: str):
-    skills, docs = _retrieve_and_rerank(question)
+def build_context(question: str, autenticado: bool = True):
+    skills, docs = _retrieve_and_rerank(question, autenticado)
 
     parts = []
     total_chars = 0
@@ -160,7 +177,7 @@ def _build_messages(question: str, history: list) -> tuple[list, bool]:
     return messages, grounded
 
 
-def ask(session_id: str, question: str) -> dict:
+def ask(session_id: str, question: str, autenticado: bool = True) -> dict:
     """
     Interface pública para a API HTTP.
 
@@ -185,7 +202,7 @@ def ask(session_id: str, question: str) -> dict:
         if last_user:
             rag_query = f"{last_user} {question}"
 
-    context, docs, skills = build_context(rag_query)
+    context, docs, skills = build_context(rag_query, autenticado)
     grounded = bool(skills) or bool(docs)
 
     # Sem contexto relevante → resposta determinística, sem chamar o LLM.
