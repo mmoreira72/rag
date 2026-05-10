@@ -75,9 +75,13 @@ def search_skills_tool(query: str, k: int = 3) -> str:
         confident  = [(n, d, b, s) for n, d, b, s in all_rows if s >= SKILL_MIN_SCORE_COS]
         candidates = [(n, d, s)    for n, d, b, s in all_rows if SKILL_CANDIDATE_COS <= s < SKILL_MIN_SCORE_COS]
 
+    MAX_BODY_CHARS = 4000  # evita encher o contexto do Cline com skills gigantes
+
     if confident:
         parts = []
         for name, description, body, score in confident:
+            if len(body) > MAX_BODY_CHARS:
+                body = body[:MAX_BODY_CHARS] + "\n\n_[skill truncada — peça a secção específica se precisar de mais detalhe]_"
             parts.append(
                 f"[skill: {name}]  _(score {score:.2f})_\n\n"
                 f"{body}"
