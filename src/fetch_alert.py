@@ -1,6 +1,7 @@
 """Converte uma alert policy GCP para o formato do incident_graph.py e roda a investigação."""
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,15 @@ for part in metric_filter.split('"'):
     if part and not part.startswith(" ") and "_service" in part:
         service_name = part
         break
+
+# Fallback: extract service name from policy display name when metric filter has no label
+# Patterns: "[Cloudrun] {service} response code", "[SLO] {service} SLO burn rate",
+#           "[GKE] {service} response code", "[Pubsub] {name} subscription"
+if service_name == "unknown":
+    display = policy.get("displayName", "")
+    m = re.search(r'\]\s+([\w-]+(?:-[\w]+)*)\s+(?:response|SLO|subscription|CPU|metrics)', display)
+    if m:
+        service_name = m.group(1)
 
 alert = {
     "incident": {

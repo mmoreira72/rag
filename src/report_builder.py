@@ -61,8 +61,9 @@ def _build_impact_prompt(state: dict) -> dict:
     return {
         "system": (
             "You are an SRE writing an incident impact summary. "
-            "Write 2-3 concise sentences describing user/system impact. "
-            "Be specific, not generic. No bullet points."
+            "Write 2-3 concise sentences describing user/system impact based ONLY on the facts provided. "
+            "Do NOT invent ticket numbers, severity levels, post-mortem dates, or status fields. "
+            "No bullet points. Only use information from the facts listed."
         ),
         "user": user,
     }
@@ -90,16 +91,23 @@ def _build_action_prompt(state: dict) -> dict:
             "Rollback may be appropriate if it caused the incident."
         )
 
+    has_concrete_errors = bool(root_causes)
+
     user = (
         f"Service: {service} | Alert type: {alert_type}{release_note}\n"
-        f"Root causes identified: {'; '.join(root_causes) or 'unknown'}\n\n"
+        f"Root causes identified: {'; '.join(root_causes) or 'NONE — no concrete errors found'}\n\n"
         "Recommend ONE action: rollback / escalate / monitor / close.\n"
-        "Start your response with the action word, then explain in 1 paragraph."
+        "RULES:\n"
+        "- If root causes list is NONE or empty: do NOT recommend rollback. Use monitor or escalate.\n"
+        "- rollback requires concrete error evidence (non-empty root causes) in the alert window.\n"
+        "- Do NOT start your response with the action word — start with your reasoning. "
+        "The action word appears in the section header already."
     )
     return {
         "system": (
             "You are an SRE on call making an incident decision. "
-            "Be decisive and brief. Always start with one of: rollback, escalate, monitor, close."
+            "Be decisive and concise. End your paragraph with one of: "
+            "Therefore: rollback / escalate / monitor / close."
         ),
         "user": user,
     }

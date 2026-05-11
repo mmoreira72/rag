@@ -33,6 +33,7 @@ from typing import TypedDict, Literal
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.types import interrupt
 
 # Imports locais (mesmo package)
@@ -995,7 +996,7 @@ def route_release(state: IncidentState) -> str:
 
 # ── Graph ────────────────────────────────────────────────────────────────────
 
-def build_graph():
+def build_graph(checkpointer=None):
     g = StateGraph(IncidentState)
 
     g.add_node("parse_alert",        parse_alert)
@@ -1022,7 +1023,16 @@ def build_graph():
     g.add_edge("notify_and_wait",    "decide")
     g.add_edge("decide",             END)
 
-    return g.compile(checkpointer=MemorySaver())
+    if checkpointer is None:
+        _serde = JsonPlusSerializer().with_msgpack_allowlist([
+            ("evidence", "ErrorAnalysis"),
+            ("evidence", "MetricsAnalysis"),
+            ("evidence", "SLOAnalysis"),
+            ("evidence", "ReleaseInfo"),
+            ("evidence", "IncidentReport"),
+        ])
+        checkpointer = MemorySaver(serde=_serde)
+    return g.compile(checkpointer=checkpointer)
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
