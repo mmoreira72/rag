@@ -22,7 +22,16 @@ LLM_JSON_FORMAT = os.getenv("LLM_JSON_FORMAT", "0") == "1"
 # LM Studio: nome que aparece em "My Models" (ex: "google/gemma-3-4b")
 # Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
 # Produção (servidor GPU): qwen2.5:14b
+# Default model (used as fallback and in LLM_TIERS when not overridden per-tier).
 CHAT_MODEL = os.getenv("CHAT_MODEL", "mistralai/ministral-3-14b-reasoning")
+
+# Per-tier model overrides — set to empty string to fall back to CHAT_MODEL.
+# LM Studio swaps models on demand (one at a time); expect ~10-30s per swap.
+# To use a single model for all tiers (no swaps): set all three to the same value
+# or leave the env vars unset.
+_EXTRACTIVE_MODEL = os.getenv("LLM_EXTRACTIVE_MODEL", "google/gemma-3-4b-it-qat")
+_ANALYTICAL_MODEL = os.getenv("LLM_ANALYTICAL_MODEL", "mistralai/ministral-3-14b-reasoning")
+_NARRATIVE_MODEL  = os.getenv("LLM_NARRATIVE_MODEL",  "mistralai/codestral-22b-v0.1")
 
 # Per-role LLM configuration.
 # While constrained to a single 12 GB model, all tiers point to the same model.
@@ -34,20 +43,23 @@ MAX_LOG_LINES = int(os.getenv("MAX_LOG_LINES", "150"))
 MAX_LOG_CHARS = int(os.getenv("MAX_LOG_CHARS", "12000"))
 
 LLM_TIERS: dict[str, dict] = {
+    # gemma 4B — fast, low memory, good for simple JSON extraction
     "extractive": {
-        "model":       CHAT_MODEL,
+        "model":       _EXTRACTIVE_MODEL or CHAT_MODEL,
         "temperature": 0.0,
         "max_tokens":  1024,
     },
+    # ministral 14B reasoning — strong causal reasoning, root-cause analysis
     "analytical": {
-        "model":       CHAT_MODEL,
+        "model":       _ANALYTICAL_MODEL or CHAT_MODEL,
         "temperature": 0.1,
         "max_tokens":  2048,
     },
+    # codestral 22B — best prose synthesis, structured report composition
     "narrative": {
-        "model":       CHAT_MODEL,
+        "model":       _NARRATIVE_MODEL or CHAT_MODEL,
         "temperature": 0.3,
-        "max_tokens":  3072,
+        "max_tokens":  4096,
     },
 }
 
