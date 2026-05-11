@@ -430,6 +430,14 @@ def fetch_errors(state: IncidentState) -> dict:
     )
 
     raw = call_llm(system, combined[:MAX_LOG_CHARS], role=LLMRole.ANALYTICAL, json_mode=True, enable_thinking=True)
+
+    # Empty raw = model crash / token overflow — flag immediately, don't silently lose evidence
+    if not raw or not raw.strip():
+        debug_path = _save_failed_response("fetch_errors", raw or "", system, combined[:2000])
+        print(f"  [fetch_errors] empty response from LLM (crash or token overflow)")
+        print(f"  [fetch_errors] debug saved to {debug_path}")
+        return {"error_logs": ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs)), "project": project}
+
     parsed = parse_llm_json(raw, default={})
     try:
         items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])

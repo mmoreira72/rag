@@ -23,15 +23,15 @@ LLM_JSON_FORMAT = os.getenv("LLM_JSON_FORMAT", "0") == "1"
 # Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
 # Produção (servidor GPU): qwen2.5:14b
 # Default model (used as fallback and in LLM_TIERS when not overridden per-tier).
-CHAT_MODEL = os.getenv("CHAT_MODEL", "mistralai/ministral-3-14b-reasoning")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-4-e4b")
 
 # Per-tier model overrides — set to empty string to fall back to CHAT_MODEL.
 # LM Studio swaps models on demand (one at a time); expect ~10-30s per swap.
 # To use a single model for all tiers (no swaps): set all three to the same value
 # or leave the env vars unset.
-_EXTRACTIVE_MODEL = os.getenv("LLM_EXTRACTIVE_MODEL", "google/gemma-3-4b-it-qat")
+_EXTRACTIVE_MODEL = os.getenv("LLM_EXTRACTIVE_MODEL", "")
 _ANALYTICAL_MODEL = os.getenv("LLM_ANALYTICAL_MODEL", "mistralai/ministral-3-14b-reasoning")
-_NARRATIVE_MODEL  = os.getenv("LLM_NARRATIVE_MODEL",  "mistralai/ministral-3-14b-reasoning")
+_NARRATIVE_MODEL  = os.getenv("LLM_NARRATIVE_MODEL",  "")
 
 # Per-role LLM configuration.
 # While constrained to a single 12 GB model, all tiers point to the same model.
@@ -50,11 +50,12 @@ LLM_TIERS: dict[str, dict] = {
         "max_tokens":  1024,
     },
     # ministral 14B reasoning — strong causal reasoning, root-cause analysis
-    # 6144: reasoning models emit 1500-3000 thinking tokens + 500-1500 for JSON output
+    # 8192: reasoning models emit 2000-4000 thinking tokens + 1000-2000 for JSON output
+    # Previous 6144 was being exhausted mid-JSON when thinking ran long
     "analytical": {
         "model":       _ANALYTICAL_MODEL or CHAT_MODEL,
         "temperature": 0.1,
-        "max_tokens":  6144,
+        "max_tokens":  8192,
     },
     # ministral 14B reasoning — prose synthesis + report composition
     "narrative": {
