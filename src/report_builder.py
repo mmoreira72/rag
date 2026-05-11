@@ -74,13 +74,15 @@ def _build_impact_prompt(state: dict) -> dict:
     if isinstance(release, ReleaseInfo) and release.found:
         facts.append(f"Release detected: {release.release_id} ({release.release_type})")
 
-    # Check if evidence is genuinely missing
+    verdict = error_analysis.verdict if isinstance(error_analysis, ErrorAnalysis) else ""
+    raw_count = error_analysis.raw_log_count if isinstance(error_analysis, ErrorAnalysis) else 0
+    # evidence_missing only when LLM genuinely failed — NOT when it deliberately returned []
     evidence_missing = (
         isinstance(error_analysis, ErrorAnalysis) and
+        not verdict and  # LLM with explicit verdict made a deliberate conclusion
         (error_analysis.parse_failed or
          (error_analysis.raw_log_count > 0 and not error_analysis.patterns))
     )
-    raw_count = error_analysis.raw_log_count if isinstance(error_analysis, ErrorAnalysis) else 0
 
     user = (
         f"Service: {state.get('service')} | Project: {state.get('project')}\n"
@@ -205,6 +207,11 @@ def build_markdown_report(
             warnings.append(
                 f"⚠️ **Evidence parsing failed** — the LLM produced malformed output "
                 f"for log analysis. Manual review required. {_log_link}"
+            )
+        elif error_analysis.verdict:
+            # LLM made an explicit conclusion — show it prominently
+            warnings.append(
+                f"ℹ️ **LLM verdict:** {error_analysis.verdict} {_log_link}"
             )
         elif error_analysis.raw_log_count > 0 and not error_analysis.patterns:
             warnings.append(

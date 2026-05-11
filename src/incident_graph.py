@@ -528,8 +528,11 @@ def fetch_errors(state: IncidentState) -> dict:
 
     parsed = parse_llm_json(raw, default={})
     try:
-        items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
-        analysis = ErrorAnalysis(patterns=items or [], raw_log_count=len(all_logs))
+        items   = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        verdict = parsed.get("verdict", "") if isinstance(parsed, dict) else ""
+        analysis = ErrorAnalysis(patterns=items or [], raw_log_count=len(all_logs), verdict=verdict)
+        if verdict:
+            print(f"  [fetch_errors] LLM verdict: {verdict}")
     except Exception as exc:
         debug_path = _save_failed_response("fetch_errors", raw, system, combined[:2000])
         print(f"  [fetch_errors] validation failed: {exc}")

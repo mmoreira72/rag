@@ -20,6 +20,7 @@ class ErrorAnalysis(BaseModel):
     patterns: list[ErrorPattern] = Field(default_factory=list)
     raw_log_count: int = 0
     parse_failed: bool = False  # True when LLM JSON was malformed
+    verdict: str = ""  # LLM explicit conclusion, e.g. "false_positive — only health checks"
 
 
 class MetricObservation(BaseModel):
