@@ -50,16 +50,31 @@ def test_call_llm_temperature_override():
 
 
 def test_call_llm_json_mode_sets_response_format():
-    """json_mode=True must pass model_kwargs with response_format=json_object."""
+    """json_mode=True + LLM_JSON_FORMAT=True must pass model_kwargs with response_format=json_object."""
+    import incident_graph as ig
+    import incident_graph as _config_ref  # same module object used at call time
     captured = {}
-    with patch("incident_graph.ChatOpenAI", _make_fake_chatai(captured)):
-        from incident_graph import call_llm
-        call_llm("sys", "user", role=LLMRole.EXTRACTIVE, json_mode=True)
+    with patch("incident_graph.ChatOpenAI", _make_fake_chatai(captured)), \
+         patch("incident_graph._config.LLM_JSON_FORMAT", True):
+        ig.call_llm("sys", "user", role=LLMRole.EXTRACTIVE, json_mode=True)
 
-    assert "model_kwargs" in captured, "model_kwargs not passed when json_mode=True"
+    assert "model_kwargs" in captured, "model_kwargs not passed when LLM_JSON_FORMAT=True and json_mode=True"
     fmt = captured["model_kwargs"].get("response_format", {})
     assert fmt.get("type") == "json_object", (
         f"Expected response_format.type=json_object, got {fmt}"
+    )
+
+
+def test_call_llm_json_mode_no_response_format_without_flag():
+    """json_mode=True without LLM_JSON_FORMAT must NOT pass model_kwargs (LM Studio compat)."""
+    import incident_graph as ig
+    captured = {}
+    with patch("incident_graph.ChatOpenAI", _make_fake_chatai(captured)), \
+         patch("incident_graph._config.LLM_JSON_FORMAT", False):
+        ig.call_llm("sys", "user", role=LLMRole.EXTRACTIVE, json_mode=True)
+
+    assert "model_kwargs" not in captured, (
+        "model_kwargs must NOT be passed when LLM_JSON_FORMAT=False (LM Studio compat)"
     )
 
 

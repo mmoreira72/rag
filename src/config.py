@@ -13,6 +13,11 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 # Ollama container (server): http://ollama:11434/v1  (sobrescrito pelo docker-compose.server.yml)
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 
+# Whether the backend supports response_format=json_object (Ollama does; LM Studio doesn't).
+# Set LLM_JSON_FORMAT=1 when running against Ollama to enable constrained decoding.
+# When 0 (default), json_mode uses prompt-only enforcement which works everywhere.
+LLM_JSON_FORMAT = os.getenv("LLM_JSON_FORMAT", "0") == "1"
+
 # Chat model — use o identifier exato do servidor:
 # LM Studio: nome que aparece em "My Models" (ex: "google/gemma-3-4b")
 # Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
