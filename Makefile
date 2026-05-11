@@ -121,7 +121,10 @@ mcp-serve:
 # Variáveis sobrescrevíveis:
 #   SKILLS_DIR — path para o repo cloudengineerskills (default: ~/cloudengineerskills/skills)
 #   LOCAL_PG   — DSN do pgvector local
-SKILLS_DIR ?= $(HOME)/cloudengineerskills/skills
+# Incident investigation skills only — subset of cloudengineerskills.
+# Full path needed: Makefile does not expand OneDrive paths via ~
+# Investigation skills for the incident graph (subset of cloudengineerskills).
+SKILLS_DIR ?= $(HOME)/Library/CloudStorage/OneDrive-Hostelworld/Documents/personal/cloudengineerskills/investigation-skills
 LOCAL_PG   := postgresql://rag:rag@localhost:5435/rag
 # Força Python 3.14 (Homebrew) para os targets locais — evita o 3.9.6 do sistema
 LOCAL_PY   := uv run --python python3.14 --with-requirements "$(REQS)" python
