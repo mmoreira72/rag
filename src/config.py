@@ -31,7 +31,7 @@ CHAT_MODEL = os.getenv("CHAT_MODEL", "mistralai/ministral-3-14b-reasoning")
 # or leave the env vars unset.
 _EXTRACTIVE_MODEL = os.getenv("LLM_EXTRACTIVE_MODEL", "google/gemma-3-4b-it-qat")
 _ANALYTICAL_MODEL = os.getenv("LLM_ANALYTICAL_MODEL", "mistralai/ministral-3-14b-reasoning")
-_NARRATIVE_MODEL  = os.getenv("LLM_NARRATIVE_MODEL",  "mistralai/codestral-22b-v0.1")
+_NARRATIVE_MODEL  = os.getenv("LLM_NARRATIVE_MODEL",  "mistralai/ministral-3-14b-reasoning")
 
 # Per-role LLM configuration.
 # While constrained to a single 12 GB model, all tiers point to the same model.
@@ -55,7 +55,7 @@ LLM_TIERS: dict[str, dict] = {
         "temperature": 0.1,
         "max_tokens":  2048,
     },
-    # codestral 22B — best prose synthesis, structured report composition
+    # ministral 14B reasoning — prose synthesis + report composition
     "narrative": {
         "model":       _NARRATIVE_MODEL or CHAT_MODEL,
         "temperature": 0.3,

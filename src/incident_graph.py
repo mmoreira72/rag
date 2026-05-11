@@ -122,6 +122,7 @@ def call_llm(
     temperature: float | None = None,
     json_mode: bool = False,
     max_tokens: int | None = None,
+    enable_thinking: bool = False,
 ) -> str:
     """Invoke an LLM with per-call configuration.
 
@@ -138,6 +139,10 @@ def call_llm(
         Wraps `user` in <data> tags with a prompt-injection hardening instruction.
     max_tokens
         If provided, overrides the role default.
+    enable_thinking
+        If True, lets the model use its reasoning/thinking phase (ministral).
+        If False (default), injects [THINK][/THINK] to skip thinking — faster
+        and cheaper for extraction tasks that don't need deep reasoning.
     """
     from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -158,6 +163,11 @@ def call_llm(
         # LM Studio only accepts 'json_schema' or 'text' — prompt enforcement suffices.
         if _config.LLM_JSON_FORMAT:
             kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+
+    if not enable_thinking:
+        # Inject empty think block to force reasoning model to skip thinking phase.
+        # Ignored by non-reasoning models (gemma). Saves tokens on extraction tasks.
+        user = f"[THINK][/THINK]\n\n{user}"
 
     client = ChatOpenAI(
         base_url=LLM_BASE_URL,
@@ -404,7 +414,7 @@ def fetch_errors(state: IncidentState) -> dict:
         'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}]}'
     )
 
-    raw = call_llm(system, combined[:MAX_LOG_CHARS], role=LLMRole.ANALYTICAL, json_mode=True)
+    raw = call_llm(system, combined[:MAX_LOG_CHARS], role=LLMRole.ANALYTICAL, json_mode=True, enable_thinking=True)
     parsed = parse_llm_json(raw, default={})
     try:
         items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
@@ -754,6 +764,7 @@ def build_report(state: IncidentState) -> dict:
         user=impact_prompt["user"],
         role=LLMRole.NARRATIVE,
         max_tokens=400,
+        enable_thinking=True,
     )
 
     action_prompt = _build_action_prompt(state)
@@ -762,6 +773,7 @@ def build_report(state: IncidentState) -> dict:
         user=action_prompt["user"],
         role=LLMRole.NARRATIVE,
         max_tokens=600,
+        enable_thinking=True,
     )
     recommended_action = _extract_action(action_raw)
 
@@ -964,7 +976,7 @@ Use error_logs to identify the underlying cause (errors, latency spikes).
 Include the console URL in the report.
 Return JSON: {{"findings": [{{"slo_id": "...", "slo_type": "availability|latency", "goal": "...", "burn_rate": 0.0, "likely_cause": "...", "root_cause": true}}]}}"""
 
-    raw = call_llm(system, compact[:3000], role=LLMRole.ANALYTICAL, json_mode=True)
+    raw = call_llm(system, compact[:3000], role=LLMRole.ANALYTICAL, json_mode=True, enable_thinking=True)
     parsed = parse_llm_json(raw, default={})
     try:
         items = parsed.get("findings") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
