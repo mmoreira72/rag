@@ -431,7 +431,8 @@ def fetch_errors(state: IncidentState) -> dict:
     }.get(rtype, "gcloud logging read error logs GCP")
     skill = get_skill(skill_query)
 
-    all_logs = _run_gcloud_logging(
+    # Query 1: application logs (stdout/stderr) — root cause
+    app_logs = _run_gcloud_logging(
         (
             f'resource.type="{rtype}"'
             f' AND {resource_filter}'
@@ -440,32 +441,50 @@ def fetch_errors(state: IncidentState) -> dict:
             f' AND timestamp<="{post_end}"'
         ),
         project,
-        limit=150,
+        limit=100,
         label=f"app-logs:{rtype}",
     )
 
-    # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)
+    # Query 2 (Cloud Run only): request logs with status>=500 — symptom context
+    # Shows which endpoints are failing and correlates timing with app errors.
+    request_logs = []
+    if rtype == "cloud_run_revision":
+        request_logs = _run_gcloud_logging(
+            (
+                f'resource.type="{rtype}"'
+                f' AND {resource_filter}'
+                f' AND logName=~"requests"'
+                f' AND httpRequest.status>=500'
+                f' AND timestamp>="{pre_start}"'
+                f' AND timestamp<="{post_end}"'
+            ),
+            project,
+            limit=50,
+            label="request-errors:500+",
+        )
+
+    # Merge: app logs first (root cause context), then request logs (symptom)
+    all_logs = app_logs + request_logs
+
+    # Extrai texto de cada entrada para o LLM
     log_lines = []
     for entry in all_logs:
         ts  = entry.get("timestamp", "")
         sev = entry.get("severity", "DEFAULT")
-        # stdout/stderr logs: textPayload or jsonPayload.message
         msg = (
             entry.get("textPayload")
             or entry.get("jsonPayload", {}).get("message")
             or entry.get("jsonPayload", {}).get("msg")
         )
-        # request logs: httpRequest.status + method + url (no textPayload/jsonPayload.message)
         if not msg:
             http = entry.get("httpRequest", {})
-            if http:
+            if http and http.get("status"):
                 msg = (
-                    f"HTTP {http.get('status', '?')} "
+                    f"HTTP {http.get('status')} "
                     f"{http.get('requestMethod', '')} "
-                    f"{http.get('requestUrl', '')[:120]} "
+                    f"{http.get('requestUrl', '')[:100]} "
                     f"latency={http.get('latency', '?')}"
                 )
-        # jsonPayload fallback (catches other structured log formats)
         if not msg:
             jp = entry.get("jsonPayload")
             if jp and isinstance(jp, dict):
@@ -479,12 +498,17 @@ def fetch_errors(state: IncidentState) -> dict:
     system = (
         f"{skill_hint}\n\n" if skill_hint else ""
     ) + (
-        "Analyze these Cloud Run logs and identify ALL error patterns.\n"
+        "You will see two types of log entries:\n"
+        "1. APPLICATION logs (stdout/stderr): exception messages, timeouts, warnings — these reveal WHY errors occur.\n"
+        "2. REQUEST logs (HTTP ...): lines starting with 'HTTP 5xx' — these show WHICH endpoints are failing.\n\n"
+        "Identify ALL error patterns and correlate: which application errors (timeouts, exceptions) "
+        "coincide with or precede the HTTP 5xx responses? That correlation is the root cause.\n\n"
         "Pay special attention to:\n"
-        '- "FATAL ERROR" / "heap out of memory" / "Allocation failed" → JavaScript OOM (ROOT CAUSE)\n'
-        '- "LIVENESS probe failed" → instance killed after OOM (SYMPTOM)\n'
-        "- Connection errors / 503 → consequence of restarts (SYMPTOM)\n\n"
-        "If OOM errors predate the liveness failures, mark them as root_cause=true.\n\n"
+        '- Timeout errors (AxiosError, connection timeout) before HTTP 5xx → upstream dependency failure (ROOT CAUSE)\n'
+        '- "FATAL ERROR" / "heap out of memory" → OOM crash (ROOT CAUSE)\n'
+        '- "LIVENESS probe failed" / HTTP 503 → instance restart (SYMPTOM)\n'
+        "- HTTP 500 on specific endpoints → which endpoints are affected\n\n"
+        "Mark root_cause=true only for patterns that CAUSE the 5xx, not the 5xx themselves.\n\n"
         'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}]}'
     )
 
