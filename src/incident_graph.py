@@ -196,8 +196,24 @@ def call_llm(
         resp = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
         return resp.content
     except Exception as exc:
-        # Model crash / context overflow / API error — return empty string so
-        # parse_llm_json returns the default and the node sets parse_failed=True.
+        err_str = str(exc)
+        if "n_ctx" in err_str or "context length" in err_str.lower() or "context window" in err_str.lower():
+            # LM Studio / llama.cpp context overflow — retry with half the input
+            print(f"  [call_llm] CONTEXT OVERFLOW ({role.value}) — retrying with 50% input")
+            print(f"  [call_llm] Fix: in LM Studio, increase 'Context Length' for this model (e.g. 32768)")
+            # Trim the user content: find the <data> block and halve it
+            if "<data>" in user and "</data>" in user:
+                pre, rest = user.split("<data>", 1)
+                data, post = rest.rsplit("</data>", 1)
+                user = f"{pre}<data>{data[:len(data)//2]}\n[...truncated for context limit]</data>{post}"
+            else:
+                user = user[:len(user)//2]
+            try:
+                resp = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+                return resp.content
+            except Exception as exc2:
+                print(f"  [call_llm] RETRY also failed: {exc2}")
+                return ""
         print(f"  [call_llm] ERROR ({role.value}): {exc}")
         return ""
 
