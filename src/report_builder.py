@@ -76,12 +76,10 @@ def _build_impact_prompt(state: dict) -> dict:
 
     verdict = error_analysis.verdict if isinstance(error_analysis, ErrorAnalysis) else ""
     raw_count = error_analysis.raw_log_count if isinstance(error_analysis, ErrorAnalysis) else 0
-    # evidence_missing only when LLM genuinely failed — NOT when it deliberately returned []
+    # evidence_missing ONLY when LLM crashed (parse_failed).
+    # patterns=[] with parse_failed=False = analysis completed, no errors found — not a failure.
     evidence_missing = (
-        isinstance(error_analysis, ErrorAnalysis) and
-        not verdict and  # LLM with explicit verdict made a deliberate conclusion
-        (error_analysis.parse_failed or
-         (error_analysis.raw_log_count > 0 and not error_analysis.patterns))
+        isinstance(error_analysis, ErrorAnalysis) and error_analysis.parse_failed
     )
 
     user = (
