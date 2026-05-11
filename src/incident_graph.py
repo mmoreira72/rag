@@ -284,8 +284,15 @@ def _resolve_project(monitoring_project: str, metric_type: str,
         token = subprocess.run(
             ["gcloud", "auth", "print-access-token"],
             capture_output=True, text=True, timeout=10).stdout.strip()
+        # Filter by resource label to avoid getting the wrong service's project
+        resource_label_filter = ""
+        if resource_id:
+            if resource_type == "pubsub_subscription":
+                resource_label_filter = f' AND resource.labels.subscription_id="{resource_id}"'
+            else:
+                resource_label_filter = f' AND resource.labels.service_name="{resource_id}"'
         params = urllib.parse.urlencode({
-            "filter": f'metric.type="{metric_type}"',
+            "filter": f'metric.type="{metric_type}"{resource_label_filter}',
             "interval.startTime": start_time,
             "interval.endTime":   end_time,
             "view": "HEADERS",
@@ -398,7 +405,8 @@ Return JSON: {{"patterns": [{{"count": N, "message": "...", "first_seen": "ISO86
     except Exception as exc:
         print(f"  [fetch_errors] validation failed: {exc}")
         analysis = ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs))
-    return {"error_logs": analysis}
+    # Propagate the resolved project so build_report uses the right log URLs
+    return {"error_logs": analysis, "project": project}
 
 
 def fetch_metrics(state: IncidentState) -> dict:
@@ -1024,7 +1032,9 @@ def build_graph(checkpointer=None):
     g.add_edge("decide",             END)
 
     if checkpointer is None:
-        _serde = JsonPlusSerializer().with_msgpack_allowlist([
+        # Pass allowlist in the constructor (not via with_msgpack_allowlist which merges
+        # over True/default and still emits warnings for unregistered types).
+        _serde = JsonPlusSerializer(allowed_msgpack_modules=[
             ("evidence", "ErrorAnalysis"),
             ("evidence", "MetricsAnalysis"),
             ("evidence", "SLOAnalysis"),
