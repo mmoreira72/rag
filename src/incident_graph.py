@@ -167,8 +167,14 @@ def call_llm(
         max_tokens=effective_max_tok,
         **kwargs,
     )
-    resp = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-    return resp.content
+    try:
+        resp = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
+        return resp.content
+    except Exception as exc:
+        # Model crash / context overflow / API error — return empty string so
+        # parse_llm_json returns the default and the node sets parse_failed=True.
+        print(f"  [call_llm] ERROR ({role.value}): {exc}")
+        return ""
 
 
 # ── Nodes ────────────────────────────────────────────────────────────────────
@@ -383,21 +389,23 @@ def fetch_errors(state: IncidentState) -> dict:
         if msg:
             log_lines.append(f"[{ts}] [{sev}] {msg[:300]}")
 
-    combined = "\n".join(log_lines[:100])
+    # Limit to 40 lines to keep total prompt within 4B-model context window.
+    combined = "\n".join(log_lines[:40])
+    skill_hint = skill[:400] if skill else ""
 
-    system = f"""{skill}
+    system = (
+        f"{skill_hint}\n\n" if skill_hint else ""
+    ) + (
+        "Analyze these Cloud Run logs and identify ALL error patterns.\n"
+        "Pay special attention to:\n"
+        '- "FATAL ERROR" / "heap out of memory" / "Allocation failed" → JavaScript OOM (ROOT CAUSE)\n'
+        '- "LIVENESS probe failed" → instance killed after OOM (SYMPTOM)\n'
+        "- Connection errors / 503 → consequence of restarts (SYMPTOM)\n\n"
+        "If OOM errors predate the liveness failures, mark them as root_cause=true.\n\n"
+        'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}]}'
+    )
 
-Analyze these Cloud Run logs and identify ALL error patterns.
-Pay special attention to:
-- "FATAL ERROR" / "heap out of memory" / "Allocation failed" → JavaScript OOM (ROOT CAUSE)
-- "LIVENESS probe failed" → instance killed after OOM (SYMPTOM)
-- Connection errors / 503 → consequence of restarts (SYMPTOM)
-
-If OOM errors predate the liveness failures, mark them as root_cause=true.
-
-Return JSON: {{"patterns": [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}}]}}"""
-
-    raw = call_llm(system, combined[:8000], role=LLMRole.ANALYTICAL, json_mode=True)
+    raw = call_llm(system, combined[:3000], role=LLMRole.ANALYTICAL, json_mode=True)
     parsed = parse_llm_json(raw, default={})
     try:
         items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
