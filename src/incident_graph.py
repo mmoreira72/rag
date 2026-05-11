@@ -423,12 +423,10 @@ def fetch_errors(state: IncidentState) -> dict:
     else:
         log_name_filter = ""
 
-    # get_skill dinâmico baseado no tipo de recurso
-    skill_query = {
-        "cloud_run_revision":  "gcloud logging read error Cloud Run service",
-        "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages",
-        "cloudsql_database":   "Cloud SQL error logs slow query",
-    }.get(rtype, "gcloud logging read error logs GCP")
+    # Selecciona skill de investigação pelo tipo de alerta + resource type.
+    # A skill é o system prompt completo — descreve o que procurar e como interpretar.
+    condition = state.get("condition_name", "")
+    skill_query = f"{rtype} {condition} error log investigation incident"
     skill = get_skill(skill_query)
 
     # Query 1: application logs (stdout/stderr) — root cause
@@ -493,24 +491,19 @@ def fetch_errors(state: IncidentState) -> dict:
             log_lines.append(f"[{ts}] [{sev}] {msg[:300]}")
 
     combined = "\n".join(log_lines[:MAX_LOG_LINES])
-    skill_hint = skill[:800] if skill else ""
 
-    system = (
-        f"{skill_hint}\n\n" if skill_hint else ""
-    ) + (
-        "You will see two types of log entries:\n"
-        "1. APPLICATION logs (stdout/stderr): exception messages, timeouts, warnings — these reveal WHY errors occur.\n"
-        "2. REQUEST logs (HTTP ...): lines starting with 'HTTP 5xx' — these show WHICH endpoints are failing.\n\n"
-        "Identify ALL error patterns and correlate: which application errors (timeouts, exceptions) "
-        "coincide with or precede the HTTP 5xx responses? That correlation is the root cause.\n\n"
-        "Pay special attention to:\n"
-        '- Timeout errors (AxiosError, connection timeout) before HTTP 5xx → upstream dependency failure (ROOT CAUSE)\n'
-        '- "FATAL ERROR" / "heap out of memory" → OOM crash (ROOT CAUSE)\n'
-        '- "LIVENESS probe failed" / HTTP 503 → instance restart (SYMPTOM)\n'
-        "- HTTP 500 on specific endpoints → which endpoints are affected\n\n"
-        "Mark root_cause=true only for patterns that CAUSE the 5xx, not the 5xx themselves.\n\n"
-        'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}]}'
-    )
+    # A skill É o system prompt — contém toda a lógica de investigação específica ao alert type.
+    # Fallback genérico usado apenas quando não há skill correspondente no pgvector.
+    if skill:
+        # Remove o prefixo "[skill: name]\n\n" devolvido pelo get_skill()
+        system = skill.split("\n\n", 1)[1] if skill.startswith("[skill:") else skill
+    else:
+        system = (
+            "You will see application logs (stdout/stderr) and request logs (HTTP status lines).\n"
+            "Identify error patterns and their root causes.\n"
+            "Mark root_cause=true for errors that CAUSE failures, not the failures themselves.\n\n"
+            'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}]}'
+        )
 
     raw = call_llm(system, combined[:MAX_LOG_CHARS], role=LLMRole.ANALYTICAL, json_mode=True, enable_thinking=True)
 
@@ -536,16 +529,9 @@ def fetch_errors(state: IncidentState) -> dict:
 
 def fetch_metrics(state: IncidentState) -> dict:
     """Para alertas metric-based: consulta time series e descreve o recurso."""
-    skill_query_map = {
-        "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages drain",
-        "cloudsql_database":   "Cloud SQL replication lag slow query operations",
-        "gce_instance":        "GCE instance CPU memory disk metrics",
-    }
-    skill_query = skill_query_map.get(
-        state.get("resource_type", ""),
-        "GCP metrics throughput monitoring alert"
-    )
-    skill = get_skill(skill_query)
+    condition = state.get("condition_name", "")
+    rtype     = state.get("resource_type", "")
+    skill = get_skill(f"{rtype} {condition} metrics investigation incident")
 
     alert_dt   = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
     start_time = (alert_dt - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -680,10 +666,19 @@ def fetch_metrics(state: IncidentState) -> dict:
         if not_found else ""
     )
 
-    system = f"""Analyze these GCP {rtype} metrics.
-IMPORTANT: The alert fired because the metric is {condition_direction}.{not_found_hint}
-Identify: trend, when it deviated from normal, likely cause.
-Return JSON: {{"observations": [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]}}"""
+    if skill:
+        skill_body = skill.split("\n\n", 1)[1] if skill.startswith("[skill:") else skill
+        system = (
+            f"{skill_body}\n\n"
+            f"Alert direction: the metric is {condition_direction}.{not_found_hint}"
+        )
+    else:
+        system = (
+            f"Analyze these GCP {rtype} metrics.\n"
+            f"IMPORTANT: The alert fired because the metric is {condition_direction}.{not_found_hint}\n"
+            "Identify: trend, when it deviated from normal, likely cause.\n"
+            'Return JSON: {"observations": [{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}]}'
+        )
 
     raw = call_llm(system, compact[:2000], role=LLMRole.EXTRACTIVE, json_mode=True)
     parsed = parse_llm_json(raw, default={})
@@ -807,10 +802,14 @@ def fetch_release_logs(state: IncidentState) -> dict:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         logs_raw = "[]"
 
-    system = f"""{skill}
-
-Summarise errors that appeared AFTER the release deploy.
-Return JSON: {{"patterns": [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]}}"""
+    if skill:
+        skill_body = skill.split("\n\n", 1)[1] if skill.startswith("[skill:") else skill
+        system = f"{skill_body}\n\nFocus: errors that appeared AFTER the release deploy."
+    else:
+        system = (
+            "Summarise errors that appeared AFTER the release deploy.\n"
+            'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601"}]}'
+        )
 
     raw = call_llm(system, logs_raw[:6000], role=LLMRole.EXTRACTIVE, json_mode=True)
     parsed = parse_llm_json(raw, default={})
@@ -984,7 +983,8 @@ def decide(state: IncidentState) -> dict:
 
 def fetch_slo(state: IncidentState) -> dict:
     """Para alertas SLO burn rate: consulta compliance e error budget via REST API."""
-    skill = get_skill("SLO burn rate error budget availability latency")
+    condition = state.get("condition_name", "")
+    skill = get_skill(f"cloud run SLO burn rate {condition} investigation incident")
 
     monitoring_project = state.get("project") or "hw-prod-svc-sre-mon-a1f1"
     service_name       = state.get("service") or "categories-service-api"
@@ -1100,13 +1100,17 @@ def fetch_slo(state: IncidentState) -> dict:
         "console":     console_url,
     })
 
-    system = f"""{skill}
-
-Analyze this SLO burn rate incident for {service_name}.
-Burn rate > 10x at 1h window = error budget exhausts in ~3 days.
-Use error_logs to identify the underlying cause (errors, latency spikes).
-Include the console URL in the report.
-Return JSON: {{"findings": [{{"slo_id": "...", "slo_type": "availability|latency", "goal": "...", "burn_rate": 0.0, "likely_cause": "...", "root_cause": true}}]}}"""
+    if skill:
+        skill_body = skill.split("\n\n", 1)[1] if skill.startswith("[skill:") else skill
+        system = f"{skill_body}\n\nService: {service_name} | Console: {console_url}"
+    else:
+        system = (
+            f"Analyze this SLO burn rate incident for {service_name}.\n"
+            "Burn rate > 10x at 1h window = error budget exhausts in ~3 days.\n"
+            "Use error_logs to identify the underlying cause (errors, latency spikes).\n"
+            f"Include the console URL: {console_url}\n"
+            'Return JSON: {"findings": [{"slo_id": "...", "slo_type": "availability|latency", "goal": "...", "burn_rate": 0.0, "likely_cause": "...", "root_cause": true}]}'
+        )
 
     raw = call_llm(system, compact[:3000], role=LLMRole.ANALYTICAL, json_mode=True, enable_thinking=True)
     parsed = parse_llm_json(raw, default={})
