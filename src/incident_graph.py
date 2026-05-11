@@ -405,12 +405,27 @@ def fetch_errors(state: IncidentState) -> dict:
     for entry in all_logs:
         ts  = entry.get("timestamp", "")
         sev = entry.get("severity", "DEFAULT")
+        # stdout/stderr logs: textPayload or jsonPayload.message
         msg = (
             entry.get("textPayload")
             or entry.get("jsonPayload", {}).get("message")
             or entry.get("jsonPayload", {}).get("msg")
-            or str(entry.get("jsonPayload", ""))
         )
+        # request logs: httpRequest.status + method + url (no textPayload/jsonPayload.message)
+        if not msg:
+            http = entry.get("httpRequest", {})
+            if http:
+                msg = (
+                    f"HTTP {http.get('status', '?')} "
+                    f"{http.get('requestMethod', '')} "
+                    f"{http.get('requestUrl', '')[:120]} "
+                    f"latency={http.get('latency', '?')}"
+                )
+        # jsonPayload fallback (catches other structured log formats)
+        if not msg:
+            jp = entry.get("jsonPayload")
+            if jp and isinstance(jp, dict):
+                msg = str(jp)[:300]
         if msg:
             log_lines.append(f"[{ts}] [{sev}] {msg[:300]}")
 
