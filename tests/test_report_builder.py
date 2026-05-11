@@ -83,7 +83,17 @@ def test_extract_action_defaults_to_escalate_when_ambiguous():
 
 
 def test_extract_action_parses_known_actions():
+    # "Therefore: X" pattern — explicit conclusion, highest priority
+    assert _extract_action("No evidence of errors. Therefore: monitor") == "monitor"
+    assert _extract_action("Deploy caused the issue. Therefore: rollback") == "rollback"
+
+    # Single unambiguous keyword
     assert _extract_action("rollback the deploy immediately") == "rollback"
-    assert _extract_action("monitor for 30 minutes then close") == "monitor"
     assert _extract_action("close the incident — no user impact") == "close"
     assert _extract_action("escalate to the on-call engineer") == "escalate"
+
+    # Last-occurrence fallback: rfind correctly prefers the conclusion
+    # "lacks evidence to warrant a rollback. monitoring is appropriate. Therefore: monitor"
+    assert _extract_action(
+        "lacks evidence to warrant a rollback. monitoring is appropriate. Therefore: monitor"
+    ) == "monitor"

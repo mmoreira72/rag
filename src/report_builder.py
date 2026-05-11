@@ -16,12 +16,33 @@ _ACTIONS = ("rollback", "escalate", "monitor", "close")
 
 
 def _extract_action(text: str) -> str:
-    """Parse recommended action from the first 200 chars of LLM output."""
-    snippet = text[:200].lower()
+    """Parse recommended action from LLM output.
+
+    Priority order:
+    1. "Therefore: <action>" pattern (explicit conclusion the model was instructed to use)
+    2. Last occurrence of an action word (avoids false positives like "to warrant a rollback")
+    3. Default: escalate
+    """
+    import re as _re
+    lower = text.lower()
+
+    # 1. Explicit "Therefore: X" conclusion
+    m = _re.search(r'therefore[:\s]+(\w+)', lower)
+    if m and m.group(1) in _ACTIONS:
+        return m.group(1)
+
+    # 2. Last occurrence — avoids negation context ("doesn't warrant a rollback")
+    last_pos = -1
+    last_action = None
     for action in _ACTIONS:
-        if action in snippet:
-            return action
-    return "escalate"  # safest fallback — humans get involved
+        pos = lower.rfind(action)
+        if pos > last_pos:
+            last_pos = pos
+            last_action = action
+    if last_action:
+        return last_action
+
+    return "escalate"
 
 
 def _build_impact_prompt(state: dict) -> dict:

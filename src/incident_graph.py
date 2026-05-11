@@ -736,6 +736,7 @@ def build_report(state: IncidentState) -> dict:
     else:
         log_filter = urllib.parse.quote(
             f'resource.labels.service_name="{service}"'
+            f' AND severity>=ERROR'
             f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
         )
         log_url = f"https://console.cloud.google.com/logs/query;query={log_filter}?project={project}"

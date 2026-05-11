@@ -19,6 +19,13 @@ def parse_llm_json(raw: str, default=None):
     if not isinstance(raw, str):
         return default
     text = raw.strip()
+
+    # Strip thinking blocks emitted by reasoning models (ministral, etc.)
+    # Formats: [THINK]...[/THINK] or <think>...</think>
+    import re as _re
+    text = _re.sub(r'\[THINK\].*?\[/THINK\]', '', text, flags=_re.DOTALL).strip()
+    text = _re.sub(r'<think>.*?</think>', '', text, flags=_re.DOTALL).strip()
+
     # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.splitlines()
@@ -26,6 +33,7 @@ def parse_llm_json(raw: str, default=None):
             line for line in lines
             if not line.strip().startswith("```")
         ).strip()
+
     try:
         return json.loads(text)
     except (json.JSONDecodeError, ValueError) as exc:
