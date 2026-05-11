@@ -73,4 +73,8 @@ print(f"Condition : {cond.get('displayName')}")
 print(f"Resource  : {resource_type} / {service_name}")
 print(f"Alert JSON: {tmp.name}\n")
 
+# Garante que o incident_graph usa o DB local de skills (port 5435)
+local_pg = os.environ.get("LOCAL_PG", "postgresql://rag:rag@localhost:5435/rag")
+os.environ["PG_DSN"] = local_pg
+
 os.execvp("python", ["python", "incident_graph.py", "--alert", tmp.name])
