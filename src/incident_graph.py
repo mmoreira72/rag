@@ -365,8 +365,8 @@ def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100, label: 
 def fetch_errors(state: IncidentState) -> dict:
     """Busca logs adaptando o resource_type e a skill ao tipo de alerta."""
     alert_dt      = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
-    window_end    = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    six_hours_ago = (alert_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end    = (alert_dt + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    six_hours_ago = (alert_dt - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ") #TODO TROCAR ESSE NOME DE VARIÁVEL
     project       = state["project"]
     service       = state["service"]
     rtype         = state.get("resource_type") or "cloud_run_revision"
@@ -693,7 +693,7 @@ def fetch_release_logs(state: IncidentState) -> dict:
 
     rel_ts = release.release_ts
     rel_dt = rel_ts if isinstance(rel_ts, datetime) else datetime.fromisoformat(str(rel_ts).replace("Z", "+00:00"))
-    window_start = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_start = (rel_dt - timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")
     window_end   = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     cmd = [
@@ -752,6 +752,7 @@ def build_report(state: IncidentState) -> dict:
     except Exception:
         ts_start = ts_end = ""
 
+    http_status_url = ""
     if alert_type == "slo-based":
         log_url = f"https://console.cloud.google.com/monitoring/services/{service}?project={project}"
     else:
@@ -761,6 +762,23 @@ def build_report(state: IncidentState) -> dict:
             f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
         )
         log_url = f"https://console.cloud.google.com/logs/query;query={log_filter}?project={project}"
+
+        # Extra link for HTTP response code alerts (e.g. 500, 4xx).
+        # Cloud Run request logs use httpRequest.status, not severity.
+        import re as _re
+        m = _re.search(r'\b([45]\d{2})\b', state.get("condition_name", ""))
+        if m:
+            status_code = m.group(1)
+            http_filter = urllib.parse.quote(
+                f'resource.type="cloud_run_revision"'
+                f' AND resource.labels.service_name="{service}"'
+                f' AND httpRequest.status={status_code}'
+                f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
+            )
+            http_status_url = (
+                f"https://console.cloud.google.com/logs/query"
+                f";query={http_filter}?project={project}"
+            )
 
     release_log_url = log_url
     if isinstance(release, ReleaseInfo) and release.found and release.release_ts:
@@ -807,6 +825,7 @@ def build_report(state: IncidentState) -> dict:
         alert_type=alert_type,
         alert_url=alert_url or f"https://console.cloud.google.com/monitoring?project={project}",
         log_url=log_url,
+        http_status_url=http_status_url,
         error_analysis=state.get("error_logs"),
         metrics_analysis=state.get("metrics_data"),
         release=release,

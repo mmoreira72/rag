@@ -190,6 +190,7 @@ def build_markdown_report(
     impact_paragraph: str,
     action_reasoning: str,
     recommended_action: str,
+    http_status_url: str = "",
 ) -> str:
     sections: list[str] = []
 
@@ -311,7 +312,8 @@ def build_markdown_report(
     # 7. Links
     links = [
         f"- [Alert]({alert_url})" if alert_url else "",
-        f"- [Logs]({log_url})" if log_url else "",
+        f"- [Error Logs — HTTP {http_status_url.split('status=')[1].split('&')[0] if 'status=' in http_status_url else '5xx'}]({http_status_url})" if http_status_url else "",
+        f"- [All Error Logs]({log_url})" if log_url else "",
         f"- [Release Logs]({release_log_url})" if release_log_url and isinstance(release, ReleaseInfo) and release.found else "",
     ]
     sections.append("## Links\n\n" + "\n".join(l for l in links if l))
