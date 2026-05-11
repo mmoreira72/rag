@@ -19,6 +19,27 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 # Produção (servidor GPU): qwen2.5:14b
 CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-3-4b")
 
+# Per-role LLM configuration.
+# While constrained to a single 12 GB model, all tiers point to the same model.
+# To assign different models per role later: 1-line change per key.
+LLM_TIERS: dict[str, dict] = {
+    "extractive": {
+        "model":       CHAT_MODEL,
+        "temperature": 0.0,
+        "max_tokens":  1024,
+    },
+    "analytical": {
+        "model":       CHAT_MODEL,
+        "temperature": 0.1,
+        "max_tokens":  2048,
+    },
+    "narrative": {
+        "model":       CHAT_MODEL,
+        "temperature": 0.3,
+        "max_tokens":  3072,
+    },
+}
+
 # Modelos a pré-carregar na VRAM no startup (comma-separated).
 # Exemplo: WARMUP_MODELS=qwen2.5:14b,devstral:latest
 _warmup_env = os.getenv("WARMUP_MODELS", CHAT_MODEL)
