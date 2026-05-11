@@ -43,6 +43,19 @@ from reranker import rerank
 from config import LLM_BASE_URL, CHAT_MODEL, LLM_TIERS, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
 import config as _config  # read LLM_JSON_FORMAT at call time, not import time
 from llm_roles import LLMRole, parse_llm_json
+from evidence import (
+    ErrorAnalysis, ErrorPattern,
+    MetricsAnalysis, MetricObservation,
+    SLOAnalysis, SLOFinding,
+    ReleaseInfo,
+    IncidentReport,
+)
+from report_builder import (
+    build_markdown_report,
+    _build_impact_prompt,
+    _build_action_prompt,
+    _extract_action,
+)
 
 # ── State ────────────────────────────────────────────────────────────────────
 class IncidentState(TypedDict):
@@ -62,21 +75,16 @@ class IncidentState(TypedDict):
     condition_name: str
     alert_url: str
 
-    # Logs de erro (alertas log-based: Cloud Run, Cloud SQL, GCE)
-    error_logs: str
+    # Evidence objects produced by investigation nodes
+    error_logs: ErrorAnalysis | None
+    metrics_data: MetricsAnalysis | SLOAnalysis | None   # union: metric-based vs SLO paths
+    release_logs: ErrorAnalysis | None
 
-    # Métricas (alertas metric-based: Pub/Sub, SLO, throughput)
-    metrics_data: str
-
-    # Release correlation
-    release_found: bool
-    release_id: str
-    release_ts: str
-    release_type: str       # "cloud_run" | "optimizely" | ""
-    release_logs: str
+    # Release correlation (replaces release_found/id/ts/type flat fields)
+    release: ReleaseInfo | None
 
     # Output
-    report: str
+    report: IncidentReport | None
     engineer_response: str  # preenchido após interrupt()
     decision: Literal["rollback", "escalate", "close", "monitor"]
 
@@ -379,10 +387,17 @@ Pay special attention to:
 
 If OOM errors predate the liveness failures, mark them as root_cause=true.
 
-Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true/false}}]"""
+Return JSON: {{"patterns": [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}}]}}"""
 
-    summary = call_llm(system, combined[:8000], role=LLMRole.ANALYTICAL, json_mode=True)
-    return {"error_logs": summary}
+    raw = call_llm(system, combined[:8000], role=LLMRole.ANALYTICAL, json_mode=True)
+    parsed = parse_llm_json(raw, default={})
+    try:
+        items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        analysis = ErrorAnalysis(patterns=items or [], raw_log_count=len(all_logs))
+    except Exception as exc:
+        print(f"  [fetch_errors] validation failed: {exc}")
+        analysis = ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs))
+    return {"error_logs": analysis}
 
 
 def fetch_metrics(state: IncidentState) -> dict:
@@ -534,10 +549,25 @@ def fetch_metrics(state: IncidentState) -> dict:
     system = f"""Analyze these GCP {rtype} metrics.
 IMPORTANT: The alert fired because the metric is {condition_direction}.{not_found_hint}
 Identify: trend, when it deviated from normal, likely cause.
-Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]"""
+Return JSON: {{"observations": [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]}}"""
 
-    summary = call_llm(system, compact[:2000], role=LLMRole.EXTRACTIVE, json_mode=True)
-    return {"metrics_data": summary, "error_logs": "", "project": project}
+    raw = call_llm(system, compact[:2000], role=LLMRole.EXTRACTIVE, json_mode=True)
+    parsed = parse_llm_json(raw, default={})
+    try:
+        items = parsed.get("observations") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        analysis = MetricsAnalysis(
+            observations=items or [],
+            condition_direction=condition_direction,
+            subscription_not_found=not_found,
+        )
+    except Exception as exc:
+        print(f"  [fetch_metrics] validation failed: {exc}")
+        analysis = MetricsAnalysis(
+            parse_failed=True,
+            condition_direction=condition_direction,
+            subscription_not_found=not_found,
+        )
+    return {"metrics_data": analysis, "error_logs": None, "project": project}
 
 
 def check_release(state: IncidentState) -> dict:
@@ -568,15 +598,14 @@ def check_release(state: IncidentState) -> dict:
     for rev in revisions:
         created = rev.get("metadata", {}).get("creationTimestamp", "")
         if created and window_start <= created <= state["alert_ts"]:
-            return {
-                "release_found": True,
-                "release_id":    rev.get("metadata", {}).get("name", ""),
-                "release_ts":    created,
-                "release_type":  "cloud_run",
-            }
+            return {"release": ReleaseInfo(
+                found=True,
+                release_id=rev.get("metadata", {}).get("name", ""),
+                release_ts=created,
+                release_type="cloud_run",
+            )}
 
-    # 2. Optimizely feature flag changes (Cloud Function logs in monitoring project)
-    # Deployed in hw-prod-svc-sre-mon-a1f1 — logs regardless of service project
+    # 2. Optimizely feature flag changes
     monitoring_project = "hw-prod-svc-sre-mon-a1f1"
     opt_logs = _run_gcloud_logging(
         (
@@ -593,30 +622,32 @@ def check_release(state: IncidentState) -> dict:
     )
 
     if opt_logs:
-        first = opt_logs[0]
+        first   = opt_logs[0]
         payload = first.get("jsonPayload", {})
         event   = payload.get("event", first.get("labels", {}).get("event", ""))
         rev     = payload.get("revision", "")
         ts      = first.get("timestamp", "")
         print(f"  [check_release] Optimizely event: {event} rev={rev} ts={ts}")
-        return {
-            "release_found": True,
-            "release_id":    f"optimizely-rev-{rev} ({event})",
-            "release_ts":    ts,
-            "release_type":  "optimizely",
-        }
+        return {"release": ReleaseInfo(
+            found=True,
+            release_id=f"optimizely-rev-{rev} ({event})",
+            release_ts=ts,
+            release_type="optimizely",
+        )}
 
-    return {"release_found": False, "release_id": "", "release_ts": "", "release_type": ""}
+    return {"release": ReleaseInfo(found=False)}
 
 
 def fetch_release_logs(state: IncidentState) -> dict:
     """Repete fetch_errors mas centrado no timestamp da release."""
-    if not state.get("release_ts"):
-        return {"release_logs": "[]"}
+    release = state.get("release")
+    if not (release and release.found and release.release_ts):
+        return {"release_logs": ErrorAnalysis()}
 
     skill = get_skill("gcloud logging read error logs Cloud Run service")
 
-    rel_dt = datetime.fromisoformat(state["release_ts"].replace("Z", "+00:00"))
+    rel_ts = release.release_ts
+    rel_dt = rel_ts if isinstance(rel_ts, datetime) else datetime.fromisoformat(str(rel_ts).replace("Z", "+00:00"))
     window_start = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     window_end   = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -643,101 +674,109 @@ def fetch_release_logs(state: IncidentState) -> dict:
     system = f"""{skill}
 
 Summarise errors that appeared AFTER the release deploy.
-Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
+Return JSON: {{"patterns": [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]}}"""
 
-    summary = call_llm(system, logs_raw[:6000], role=LLMRole.EXTRACTIVE, json_mode=True)
-    return {"release_logs": summary}
+    raw = call_llm(system, logs_raw[:6000], role=LLMRole.EXTRACTIVE, json_mode=True)
+    parsed = parse_llm_json(raw, default={})
+    try:
+        items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        analysis = ErrorAnalysis(patterns=items or [])
+    except Exception as exc:
+        print(f"  [fetch_release_logs] validation failed: {exc}")
+        analysis = ErrorAnalysis(parse_failed=True)
+    return {"release_logs": analysis}
 
 
 def build_report(state: IncidentState) -> dict:
     """Monta o relatório de incidente com toda a informação recolhida."""
-    skill = get_skill("incident report template SRE post-mortem")
+    import urllib.parse
 
     project    = state.get("project", "")
     service    = state.get("service", "")
     alert_ts   = state.get("alert_ts", "")
     alert_url  = state.get("alert_url", "")
     alert_type = state.get("alert_type", "log-based")
+    release    = state.get("release")
 
-    # Gera URLs reais para os links do relatório
     try:
-        alert_dt   = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
-        ts_start   = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        ts_end     = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        alert_dt = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
+        ts_start = (alert_dt - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts_end   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
     except Exception:
         ts_start = ts_end = ""
 
     if alert_type == "slo-based":
-        log_url = (
-            f"https://console.cloud.google.com/monitoring/services"
-            f"/{service}?project={project}"
-        )
+        log_url = f"https://console.cloud.google.com/monitoring/services/{service}?project={project}"
     else:
-        import urllib.parse
         log_filter = urllib.parse.quote(
             f'resource.labels.service_name="{service}"'
             f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
         )
-        log_url = (
-            f"https://console.cloud.google.com/logs/query"
-            f";query={log_filter}?project={project}"
-        )
+        log_url = f"https://console.cloud.google.com/logs/query;query={log_filter}?project={project}"
 
-    release_ts  = state.get("release_ts", "")
-    if release_ts:
+    release_log_url = log_url
+    if isinstance(release, ReleaseInfo) and release.found and release.release_ts:
         try:
-            rel_dt     = datetime.fromisoformat(release_ts.replace("Z", "+00:00"))
-            rel_start  = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            rel_end    = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            import urllib.parse as _up
-            rel_filter = _up.quote(
+            rel_dt    = release.release_ts if isinstance(release.release_ts, datetime) else \
+                        datetime.fromisoformat(str(release.release_ts).replace("Z", "+00:00"))
+            rel_start = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rel_end   = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            rel_filter = urllib.parse.quote(
                 f'resource.labels.service_name="{service}"'
                 f' AND timestamp>="{rel_start}" AND timestamp<="{rel_end}"'
             )
             release_log_url = (
-                f"https://console.cloud.google.com/logs/query"
-                f";query={rel_filter}?project={project}"
+                f"https://console.cloud.google.com/logs/query;query={rel_filter}?project={project}"
             )
         except Exception:
-            release_log_url = log_url
-    else:
-        release_log_url = log_url
+            pass
 
-    system = f"""{skill}
+    # Two small LLM calls: impact paragraph + action recommendation
+    impact_prompt  = _build_impact_prompt(state)
+    impact_paragraph = call_llm(
+        system=impact_prompt["system"],
+        user=impact_prompt["user"],
+        role=LLMRole.NARRATIVE,
+        max_tokens=400,
+    )
 
-Using the incident data below, generate a concise incident report in Markdown.
-For metric-based/slo-based alerts use metrics_data; for log-based use error_logs.
-If release_type is "optimizely", highlight it as a FEATURE FLAG CHANGE, not a code deploy.
-Use the exact URLs provided in log_url, release_log_url, and alert_url — do NOT use placeholder variables like ${{ALERT_URL}}.
-Include: Impact, Timeline, Error/Metric Pattern, Release Correlation, Recommended Action.
-End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
+    action_prompt = _build_action_prompt(state)
+    action_raw = call_llm(
+        system=action_prompt["system"],
+        user=action_prompt["user"],
+        role=LLMRole.NARRATIVE,
+        max_tokens=600,
+    )
+    recommended_action = _extract_action(action_raw)
 
-    # Safe consumption of JSON state fields — fall back to raw string on parse failure
-    error_logs_parsed   = parse_llm_json(state.get("error_logs",   ""), default=state.get("error_logs",   ""))
-    metrics_data_parsed = parse_llm_json(state.get("metrics_data", ""), default=state.get("metrics_data", ""))
-    release_logs_parsed = parse_llm_json(state.get("release_logs", ""), default=state.get("release_logs", ""))
+    markdown = build_markdown_report(
+        incident_id=state.get("incident_id", "unknown"),
+        service=service,
+        project=project,
+        alert_ts=alert_ts,
+        alert_type=alert_type,
+        alert_url=alert_url or f"https://console.cloud.google.com/monitoring?project={project}",
+        log_url=log_url,
+        error_analysis=state.get("error_logs"),
+        metrics_analysis=state.get("metrics_data"),
+        release=release,
+        release_log_url=release_log_url,
+        release_errors=state.get("release_logs"),
+        impact_paragraph=impact_paragraph,
+        action_reasoning=action_raw,
+        recommended_action=recommended_action,
+    )
 
-    context = json.dumps({
-        "incident_id":      state.get("incident_id"),
-        "service":          service,
-        "project":          project,
-        "alert_ts":         alert_ts,
-        "condition":        state.get("condition_name"),
-        "alert_type":       alert_type,
-        "error_logs":       error_logs_parsed,
-        "metrics_data":     metrics_data_parsed,
-        "release_found":    state.get("release_found"),
-        "release_type":     state.get("release_type"),
-        "release_id":       state.get("release_id"),
-        "release_ts":       release_ts,
-        "release_logs":     release_logs_parsed,
-        "alert_url":        alert_url or f"https://console.cloud.google.com/monitoring?project={project}",
-        "log_url":          log_url,
-        "release_log_url":  release_log_url,
-    }, indent=2)
-
-    report = call_llm(system, context[:5000], role=LLMRole.NARRATIVE)
-    return {"report": report}
+    return {"report": IncidentReport(
+        markdown=markdown,
+        recommended_action=recommended_action,
+        sections_used=[s for s in ("error_logs", "metrics_data", "release_logs")
+                       if state.get(s) is not None],
+        evidence_summary={
+            "error_patterns": len(state.get("error_logs", ErrorAnalysis()).patterns)
+            if isinstance(state.get("error_logs"), ErrorAnalysis) else 0,
+        },
+    )}
 
 
 def notify_and_wait(state: IncidentState) -> dict:
@@ -746,7 +785,8 @@ def notify_and_wait(state: IncidentState) -> dict:
     print("\n" + "="*60)
     print("INCIDENT REPORT")
     print("="*60)
-    print(state["report"])
+    report = state.get("report")
+    print(report.markdown if isinstance(report, IncidentReport) else str(report))
     print("="*60)
 
     # TODO: substituir por chamada real ao Slack/PagerDuty
@@ -906,10 +946,37 @@ Analyze this SLO burn rate incident for {service_name}.
 Burn rate > 10x at 1h window = error budget exhausts in ~3 days.
 Use error_logs to identify the underlying cause (errors, latency spikes).
 Include the console URL in the report.
-Return JSON: [{{"slo": "...", "goal": "...", "likely_cause": "...", "root_cause": true/false}}]"""
+Return JSON: {{"findings": [{{"slo_id": "...", "slo_type": "availability|latency", "goal": "...", "burn_rate": 0.0, "likely_cause": "...", "root_cause": true}}]}}"""
 
-    summary = call_llm(system, compact[:3000], role=LLMRole.ANALYTICAL, json_mode=True)
-    return {"metrics_data": summary, "error_logs": "\n".join(log_lines[:10])}
+    raw = call_llm(system, compact[:3000], role=LLMRole.ANALYTICAL, json_mode=True)
+    parsed = parse_llm_json(raw, default={})
+    try:
+        items = parsed.get("findings") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
+        # Enrich with computed burn rate data from slo_summary (LLM may miss it)
+        findings_merged = []
+        for item in (items or []):
+            match = next((s for s in slo_summary if s.get("slo_id") == item.get("slo_id")), {})
+            item.setdefault("burn_rate", match.get("burn_rate"))
+            item.setdefault("budget_exhausted_in_hours", match.get("budget_exhausted_in_hours"))
+            findings_merged.append(item)
+        # Add any SLOs the LLM missed
+        llm_ids = {i.get("slo_id") for i in (items or [])}
+        for s in slo_summary:
+            if s.get("slo_id") not in llm_ids:
+                findings_merged.append(s)
+        analysis: SLOAnalysis | MetricsAnalysis = SLOAnalysis(
+            findings=findings_merged,
+            console_url=console_url,
+        )
+    except Exception as exc:
+        print(f"  [fetch_slo] validation failed: {exc}")
+        analysis = SLOAnalysis(parse_failed=True, console_url=console_url)
+
+    error_analysis = ErrorAnalysis(patterns=[
+        ErrorPattern(count=1, message=l.split("] ", 2)[-1][:120]) for l in log_lines[:10]
+    ]) if log_lines else ErrorAnalysis()
+
+    return {"metrics_data": analysis, "error_logs": error_analysis}
 
 
 def route_alert_type(state: IncidentState) -> str:
@@ -922,7 +989,8 @@ def route_alert_type(state: IncidentState) -> str:
 
 
 def route_release(state: IncidentState) -> str:
-    return "fetch_release_logs" if state.get("release_found") else "build_report"
+    release = state.get("release")
+    return "fetch_release_logs" if (release and release.found) else "build_report"
 
 
 # ── Graph ────────────────────────────────────────────────────────────────────
