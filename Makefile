@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy local-up local-down local-psql local-ingest-skills local-mcp local-reset-db
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy local-up local-down local-psql local-ingest-skills local-mcp local-reset-db local-alerts local-fetch-alert local-incident local-graph
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -151,6 +151,17 @@ local-mcp:
 
 # ALERT: path para o JSON do alerta (default: sample)
 ALERT ?= $(CURDIR)/tests/fixtures/sample_alert_inventory.json
+
+# Projecto GCP de monitoring (sobrepõe com MON_PROJECT=outro-projeto)
+MON_PROJECT ?= hw-prod-svc-sre-mon-a1f1
+
+local-alerts:
+	@echo "Buscando alert policies em $(MON_PROJECT)..."
+	cd src && MON_PROJECT="$(MON_PROJECT)" $(LOCAL_PY) list_alerts.py
+
+local-fetch-alert:
+	@echo "Investigando policy #$(N) em $(MON_PROJECT)..."
+	cd src && MON_PROJECT="$(MON_PROJECT)" N="$(N)" $(LOCAL_PY) fetch_alert.py
 
 local-incident:
 	@echo "Running incident graph with alert: $(abspath $(ALERT))"
