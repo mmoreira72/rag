@@ -56,7 +56,7 @@ LLM_TIERS: dict[str, dict] = {
     "analytical": {
         "model":       _ANALYTICAL_MODEL or CHAT_MODEL,
         "temperature": 0.1,
-        "max_tokens":  int(os.getenv("LLM_ANALYTICAL_MAX_TOKENS", "4096")),
+        "max_tokens":  int(os.getenv("LLM_ANALYTICAL_MAX_TOKENS", "6144")),
     },
     # narrative — report composition
     "narrative": {

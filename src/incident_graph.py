@@ -852,7 +852,7 @@ def build_report(state: IncidentState) -> dict:
         user=impact_prompt["user"],
         role=LLMRole.NARRATIVE,
         max_tokens=400,
-        enable_thinking=True,
+        enable_thinking=False,  # prosa simples — sem reasoning, evita KV cache contamination
     )
 
     action_prompt = _build_action_prompt(state)
@@ -861,7 +861,7 @@ def build_report(state: IncidentState) -> dict:
         user=action_prompt["user"],
         role=LLMRole.NARRATIVE,
         max_tokens=600,
-        enable_thinking=True,
+        enable_thinking=False,  # ACTION: line é simples — sem reasoning
     )
     recommended_action = _extract_action(action_raw)
 
