@@ -91,6 +91,9 @@ class IncidentState(TypedDict):
     condition_name: str
     alert_url: str
 
+    # URL exacta dos logs analisados pelo LLM (para incluir no report)
+    analysis_log_url: str
+
     # Evidence objects produced by investigation nodes
     error_logs: ErrorAnalysis | None
     metrics_data: MetricsAnalysis | SLOAnalysis | None   # union: metric-based vs SLO paths
@@ -461,6 +464,19 @@ def fetch_errors(state: IncidentState) -> dict:
             label="request-errors:500+",
         )
 
+    # Build Cloud Logging URLs for the exact queries used — shown in report
+    # so engineers can inspect the same data the LLM analyzed.
+    import urllib.parse as _up
+    _app_filter = (
+        f'resource.type="{rtype}" AND {resource_filter}'
+        + (log_name_filter.replace(" AND ", " AND ") if log_name_filter else "")
+        + f' AND timestamp>="{pre_start}" AND timestamp<="{post_end}"'
+    )
+    analysis_log_url = (
+        f"https://console.cloud.google.com/logs/query"
+        f";query={_up.quote(_app_filter)}?project={project}"
+    )
+
     # Merge: app logs first (root cause context), then request logs (symptom)
     all_logs = app_logs + request_logs
 
@@ -512,7 +528,7 @@ def fetch_errors(state: IncidentState) -> dict:
         debug_path = _save_failed_response("fetch_errors", raw or "", system, combined[:2000])
         print(f"  [fetch_errors] empty response from LLM (crash or token overflow)")
         print(f"  [fetch_errors] debug saved to {debug_path}")
-        return {"error_logs": ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs)), "project": project}
+        return {"error_logs": ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs)), "project": project, "analysis_log_url": analysis_log_url}
 
     parsed = parse_llm_json(raw, default={})
     try:
@@ -524,7 +540,7 @@ def fetch_errors(state: IncidentState) -> dict:
         print(f"  [fetch_errors] raw response saved to {debug_path}")
         analysis = ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs))
     # Propagate the resolved project so build_report uses the right log URLs
-    return {"error_logs": analysis, "project": project}
+    return {"error_logs": analysis, "project": project, "analysis_log_url": analysis_log_url}
 
 
 def fetch_metrics(state: IncidentState) -> dict:
@@ -916,6 +932,7 @@ def build_report(state: IncidentState) -> dict:
         alert_url=alert_url or f"https://console.cloud.google.com/monitoring?project={project}",
         log_url=log_url,
         http_status_url=http_status_url,
+        analysis_log_url=state.get("analysis_log_url", ""),
         error_analysis=state.get("error_logs"),
         metrics_analysis=state.get("metrics_data"),
         release=release,

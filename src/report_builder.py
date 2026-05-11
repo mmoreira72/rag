@@ -191,24 +191,27 @@ def build_markdown_report(
     action_reasoning: str,
     recommended_action: str,
     http_status_url: str = "",
+    analysis_log_url: str = "",
 ) -> str:
     sections: list[str] = []
 
     # Build warning block — prepended right after the title
     warnings: list[str] = []
 
+    _log_link = f"[Logs analyzed by LLM]({analysis_log_url})" if analysis_log_url else f"[Inspect logs]({log_url})"
+
     if error_analysis is not None:
         if error_analysis.parse_failed:
             warnings.append(
                 f"⚠️ **Evidence parsing failed** — the LLM produced malformed output "
-                f"for log analysis. Manual review required. "
-                f"[Inspect logs]({log_url})"
+                f"for log analysis. Manual review required. {_log_link}"
             )
         elif error_analysis.raw_log_count > 0 and not error_analysis.patterns:
             warnings.append(
-                f"⚠️ **{error_analysis.raw_log_count} log entries were fetched but no "
-                f"error patterns were extracted.** Likely an LLM analysis failure. "
-                f"[Inspect logs]({log_url})"
+                f"ℹ️ **{error_analysis.raw_log_count} log entries analyzed — no system-level "
+                f"error patterns identified.** Failures may be at application level "
+                f"(e.g. payment declines, validation errors) rather than infrastructure. "
+                f"{_log_link}"
             )
 
     if metrics_analysis is not None and getattr(metrics_analysis, "parse_failed", False):
@@ -312,6 +315,7 @@ def build_markdown_report(
     # 7. Links
     links = [
         f"- [Alert]({alert_url})" if alert_url else "",
+        f"- [Logs Analyzed by LLM]({analysis_log_url})" if analysis_log_url else "",
         f"- [Error Logs — HTTP {http_status_url.split('status=')[1].split('&')[0] if 'status=' in http_status_url else '5xx'}]({http_status_url})" if http_status_url else "",
         f"- [All Error Logs]({log_url})" if log_url else "",
         f"- [Release Logs]({release_log_url})" if release_log_url and isinstance(release, ReleaseInfo) and release.found else "",
