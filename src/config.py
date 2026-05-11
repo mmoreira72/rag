@@ -30,7 +30,7 @@ CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-4-e4b")
 # To use a single model for all tiers (no swaps): set all three to the same value
 # or leave the env vars unset.
 _EXTRACTIVE_MODEL = os.getenv("LLM_EXTRACTIVE_MODEL", "")
-_ANALYTICAL_MODEL = os.getenv("LLM_ANALYTICAL_MODEL", "mistralai/ministral-3-14b-reasoning")
+_ANALYTICAL_MODEL = os.getenv("LLM_ANALYTICAL_MODEL", "")
 _NARRATIVE_MODEL  = os.getenv("LLM_NARRATIVE_MODEL",  "")
 
 # Per-role LLM configuration.
@@ -49,19 +49,20 @@ LLM_TIERS: dict[str, dict] = {
         "temperature": 0.0,
         "max_tokens":  1024,
     },
-    # ministral 14B reasoning — strong causal reasoning, root-cause analysis
-    # 8192: reasoning models emit 2000-4000 thinking tokens + 1000-2000 for JSON output
-    # Previous 6144 was being exhausted mid-JSON when thinking ran long
+    # analytical — root-cause analysis
+    # max_tokens depends on model context:
+    #   Ministral 14B (128k ctx): 8192 ok
+    #   Gemma 4B (4096 ctx): keep ≤ 1024 so input+output fits in context
     "analytical": {
         "model":       _ANALYTICAL_MODEL or CHAT_MODEL,
         "temperature": 0.1,
-        "max_tokens":  8192,
+        "max_tokens":  int(os.getenv("LLM_ANALYTICAL_MAX_TOKENS", "4096")),
     },
-    # ministral 14B reasoning — prose synthesis + report composition
+    # narrative — report composition
     "narrative": {
         "model":       _NARRATIVE_MODEL or CHAT_MODEL,
         "temperature": 0.3,
-        "max_tokens":  4096,
+        "max_tokens":  int(os.getenv("LLM_NARRATIVE_MAX_TOKENS", "2048")),
     },
 }
 

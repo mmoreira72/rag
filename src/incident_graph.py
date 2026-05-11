@@ -194,7 +194,16 @@ def call_llm(
     )
     try:
         resp = client.invoke([SystemMessage(content=system), HumanMessage(content=user)])
-        return resp.content
+        content = resp.content
+        # Gemma/reasoning models may put all tokens into thinking and produce empty content.
+        # Fall back to reasoning_content if available (it often contains the full JSON answer).
+        if not content or not content.strip():
+            reasoning = getattr(resp, "reasoning_content", None) or \
+                        resp.additional_kwargs.get("reasoning_content", "")
+            if reasoning and reasoning.strip():
+                print(f"  [call_llm] content empty — falling back to reasoning_content")
+                content = reasoning
+        return content
     except Exception as exc:
         err_str = str(exc)
         if "n_ctx" in err_str or "context length" in err_str.lower() or "context window" in err_str.lower():
