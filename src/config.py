@@ -22,11 +22,17 @@ LLM_JSON_FORMAT = os.getenv("LLM_JSON_FORMAT", "0") == "1"
 # LM Studio: nome que aparece em "My Models" (ex: "google/gemma-3-4b")
 # Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
 # Produção (servidor GPU): qwen2.5:14b
-CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-3-4b")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "mistralai/ministral-3-14b-reasoning")
 
 # Per-role LLM configuration.
 # While constrained to a single 12 GB model, all tiers point to the same model.
 # To assign different models per role later: 1-line change per key.
+# Log analysis limits — increase for models with large context windows.
+# Ministral 14B (128k ctx): 150 lines / 12000 chars works well.
+# Small 4B models (8k ctx): keep at 40 / 3000.
+MAX_LOG_LINES = int(os.getenv("MAX_LOG_LINES", "150"))
+MAX_LOG_CHARS = int(os.getenv("MAX_LOG_CHARS", "12000"))
+
 LLM_TIERS: dict[str, dict] = {
     "extractive": {
         "model":       CHAT_MODEL,

@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from db import search_skills
 from embeddings import embed
 from reranker import rerank
-from config import LLM_BASE_URL, CHAT_MODEL, LLM_TIERS, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
+from config import LLM_BASE_URL, CHAT_MODEL, LLM_TIERS, MAX_LOG_LINES, MAX_LOG_CHARS, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
 import config as _config  # read LLM_JSON_FORMAT at call time, not import time
 from llm_roles import LLMRole, parse_llm_json
 from evidence import (
@@ -389,9 +389,8 @@ def fetch_errors(state: IncidentState) -> dict:
         if msg:
             log_lines.append(f"[{ts}] [{sev}] {msg[:300]}")
 
-    # Limit to 40 lines to keep total prompt within 4B-model context window.
-    combined = "\n".join(log_lines[:40])
-    skill_hint = skill[:400] if skill else ""
+    combined = "\n".join(log_lines[:MAX_LOG_LINES])
+    skill_hint = skill[:800] if skill else ""
 
     system = (
         f"{skill_hint}\n\n" if skill_hint else ""
@@ -405,7 +404,7 @@ def fetch_errors(state: IncidentState) -> dict:
         'Return JSON: {"patterns": [{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true}]}'
     )
 
-    raw = call_llm(system, combined[:3000], role=LLMRole.ANALYTICAL, json_mode=True)
+    raw = call_llm(system, combined[:MAX_LOG_CHARS], role=LLMRole.ANALYTICAL, json_mode=True)
     parsed = parse_llm_json(raw, default={})
     try:
         items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
