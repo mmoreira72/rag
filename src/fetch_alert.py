@@ -50,20 +50,26 @@ if service_name == "unknown":
     if m:
         service_name = m.group(1)
 
+# Extract metric type from the condition filter (e.g. run.googleapis.com/request_count)
+import re as _re
+metric_type_match = _re.search(r'metric\.type\s*=\s*"([^"]+)"', metric_filter)
+metric_type = metric_type_match.group(1) if metric_type_match else ""
+
 alert = {
     "incident": {
         "incident_id": f"manual-{n + 1}",
         "resource_name": f"projects/{project}/services/{service_name}",
+        "monitoring_project": project,   # used by _resolve_project to find the real project
         "resource": {
             "type": resource_type,
             "labels": {
-                "project_id": project,
+                "project_id": "",        # intentionally empty — _resolve_project fills this in
                 "service_name": service_name,
                 "location": region,
             },
         },
         "metric": {
-            "type": metric_filter,
+            "type": metric_type or metric_filter,
             "displayName": policy.get("displayName", "?"),
         },
         "started_at": int(time.time()) - 3600,
