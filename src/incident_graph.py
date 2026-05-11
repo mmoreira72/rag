@@ -388,13 +388,21 @@ def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100, label: 
 
 
 def fetch_errors(state: IncidentState) -> dict:
-    """Busca logs adaptando o resource_type e a skill ao tipo de alerta."""
-    alert_dt      = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
-    window_end    = (alert_dt + timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    six_hours_ago = (alert_dt - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ") #TODO TROCAR ESSE NOME DE VARIÁVEL
-    project       = state["project"]
-    service       = state["service"]
-    rtype         = state.get("resource_type") or "cloud_run_revision"
+    """Busca application logs (stdout/stderr) para identificar root cause.
+
+    Estratégia em duas janelas:
+    - PRE-ALERT  (60 min antes): onde está o root cause (AxiosError, OOM, exceptions)
+    - DURING     (30 min depois): confirma persistência do problema
+
+    Filtra explicitamente por stdout/stderr para excluir request logs
+    (run.googleapis.com/requests) que só têm httpRequest.status sem mensagens.
+    """
+    alert_dt    = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    pre_start   = (alert_dt - timedelta(minutes=60)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    post_end    = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project     = state["project"]
+    service     = state["service"]
+    rtype       = state.get("resource_type") or "cloud_run_revision"
 
     # Constrói o resource label correcto conforme o tipo de recurso
     resource_label_map = {
@@ -404,6 +412,16 @@ def fetch_errors(state: IncidentState) -> dict:
         "gce_instance":         f'resource.labels.instance_id="{service}"',
     }
     resource_filter = resource_label_map.get(rtype, f'resource.labels.service_name="{service}"')
+
+    # Para Cloud Run: filtra stdout/stderr para obter logs aplicacionais.
+    # Request logs (run.googleapis.com/requests) têm httpRequest.status mas
+    # sem mensagens de erro — não são úteis para root cause analysis.
+    if rtype == "cloud_run_revision":
+        log_name_filter = (
+            ' AND (logName=~"stdout" OR logName=~"stderr")'
+        )
+    else:
+        log_name_filter = ""
 
     # get_skill dinâmico baseado no tipo de recurso
     skill_query = {
@@ -417,12 +435,13 @@ def fetch_errors(state: IncidentState) -> dict:
         (
             f'resource.type="{rtype}"'
             f' AND {resource_filter}'
-            f' AND timestamp>="{six_hours_ago}"'
-            f' AND timestamp<="{window_end}"'
+            f'{log_name_filter}'
+            f' AND timestamp>="{pre_start}"'
+            f' AND timestamp<="{post_end}"'
         ),
         project,
         limit=150,
-        label=f"6h:{rtype}",
+        label=f"app-logs:{rtype}",
     )
 
     # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)
