@@ -416,15 +416,11 @@ def fetch_errors(state: IncidentState) -> dict:
     }
     resource_filter = resource_label_map.get(rtype, f'resource.labels.service_name="{service}"')
 
-    # Para Cloud Run: filtra stdout/stderr para obter logs aplicacionais.
-    # Request logs (run.googleapis.com/requests) têm httpRequest.status mas
-    # sem mensagens de erro — não são úteis para root cause analysis.
-    if rtype == "cloud_run_revision":
-        log_name_filter = (
-            ' AND (logName=~"stdout" OR logName=~"stderr")'
-        )
-    else:
-        log_name_filter = ""
+    # Sem filtro de logName — LLM recebe TODOS os tipos de log (stdout, stderr,
+    # request logs) para poder distinguir signal de noise por si mesmo.
+    # Filtrar antes cega o modelo: health check 503s e Stripe declines são
+    # noise que o LLM precisa de ver para concluir "falso positivo".
+    log_name_filter = ""
 
     # Selecciona skill de investigação pelo tipo de alerta + resource type.
     # A skill é o system prompt completo — descreve o que procurar e como interpretar.
