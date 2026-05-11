@@ -74,7 +74,7 @@ def test_markdown_warning_on_parse_failed():
         error_analysis=ErrorAnalysis(parse_failed=True, raw_log_count=10),
     )
     assert "⚠️" in md
-    assert "evidence could not be parsed" in md.lower() or "Some evidence" in md
+    assert "parsing failed" in md.lower() or "could not be parsed" in md.lower()
 
 
 def test_extract_action_defaults_to_escalate_when_ambiguous():

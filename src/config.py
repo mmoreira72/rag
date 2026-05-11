@@ -50,10 +50,11 @@ LLM_TIERS: dict[str, dict] = {
         "max_tokens":  1024,
     },
     # ministral 14B reasoning — strong causal reasoning, root-cause analysis
+    # 6144: reasoning models emit 1500-3000 thinking tokens + 500-1500 for JSON output
     "analytical": {
         "model":       _ANALYTICAL_MODEL or CHAT_MODEL,
         "temperature": 0.1,
-        "max_tokens":  2048,
+        "max_tokens":  6144,
     },
     # ministral 14B reasoning — prose synthesis + report composition
     "narrative": {

@@ -1,6 +1,7 @@
 """Deterministic markdown report builder (Sprint 2)."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 _EPOCH = datetime.min.replace(tzinfo=timezone.utc)
@@ -14,33 +15,33 @@ from evidence import (
 
 _ACTIONS = ("rollback", "escalate", "monitor", "close")
 
+_ACTION_PATTERN = re.compile(
+    r'^ACTION:\s*(rollback|escalate|monitor|close)\s*$',
+    re.MULTILINE | re.IGNORECASE,
+)
+
 
 def _extract_action(text: str) -> str:
-    """Parse recommended action from LLM output.
+    """Extract recommended action from the LLM response.
 
-    Priority order:
-    1. "Therefore: <action>" pattern (explicit conclusion the model was instructed to use)
-    2. Last occurrence of an action word (avoids false positives like "to warrant a rollback")
-    3. Default: escalate
+    Priority:
+    1. Explicit ``ACTION: <word>`` line (canonical path — model was instructed to emit this).
+    2. Fallback: last 200 chars scanned for action word (conclusion usually at end).
+    3. Default: ``escalate`` — safest when output is ambiguous.
     """
-    import re as _re
-    lower = text.lower()
+    matches = _ACTION_PATTERN.findall(text)
+    if matches:
+        return matches[-1].lower()   # last match wins if model emitted multiple
 
-    # 1. Explicit "Therefore: X" conclusion
-    m = _re.search(r'therefore[:\s]+(\w+)', lower)
-    if m and m.group(1) in _ACTIONS:
-        return m.group(1)
-
-    # 2. Last occurrence — avoids negation context ("doesn't warrant a rollback")
-    last_pos = -1
-    last_action = None
+    # Fallback: scan only the LAST 200 chars to avoid negations like "warrant a rollback"
+    tail = text[-200:].lower()
+    found = []
     for action in _ACTIONS:
-        pos = lower.rfind(action)
-        if pos > last_pos:
-            last_pos = pos
-            last_action = action
-    if last_action:
-        return last_action
+        if action in tail:
+            found.append((tail.rindex(action), action))
+    if found:
+        found.sort(reverse=True)
+        return found[0][1]
 
     return "escalate"
 
@@ -73,11 +74,32 @@ def _build_impact_prompt(state: dict) -> dict:
     if isinstance(release, ReleaseInfo) and release.found:
         facts.append(f"Release detected: {release.release_id} ({release.release_type})")
 
+    # Check if evidence is genuinely missing
+    evidence_missing = (
+        isinstance(error_analysis, ErrorAnalysis) and
+        (error_analysis.parse_failed or
+         (error_analysis.raw_log_count > 0 and not error_analysis.patterns))
+    )
+    raw_count = error_analysis.raw_log_count if isinstance(error_analysis, ErrorAnalysis) else 0
+
     user = (
         f"Service: {state.get('service')} | Project: {state.get('project')}\n"
         f"Alert: {state.get('condition_name')}\n"
+        f"Evidence missing: {evidence_missing} | Log entries fetched: {raw_count}\n"
         f"Facts:\n" + "\n".join(f"- {f}" for f in facts)
-    ) if facts else f"Service: {state.get('service')} — see log links."
+    ) if facts else (
+        f"Service: {state.get('service')} | Evidence missing: {evidence_missing} "
+        f"| Log entries fetched: {raw_count}"
+    )
+
+    missing_instruction = (
+        f"\n\nIMPORTANT: Evidence indicates that error analysis failed or no error patterns "
+        f"were identified despite {raw_count} log entries being available. "
+        f"You MUST write exactly this paragraph:\n"
+        f'"Automated investigation incomplete. {raw_count} log entries were fetched but '
+        f'could not be analyzed by the model. Manual review required before drawing '
+        f'conclusions about user impact."'
+    ) if evidence_missing else ""
 
     return {
         "system": (
@@ -85,6 +107,7 @@ def _build_impact_prompt(state: dict) -> dict:
             "Write 2-3 concise sentences describing user/system impact based ONLY on the facts provided. "
             "Do NOT invent ticket numbers, severity levels, post-mortem dates, or status fields. "
             "No bullet points. Only use information from the facts listed."
+            + missing_instruction
         ),
         "user": user,
     }
@@ -112,23 +135,32 @@ def _build_action_prompt(state: dict) -> dict:
             "Rollback may be appropriate if it caused the incident."
         )
 
-    has_concrete_errors = bool(root_causes)
+    evidence_missing = not root_causes and (
+        isinstance(error_analysis, ErrorAnalysis) and
+        (error_analysis.parse_failed or
+         (error_analysis.raw_log_count > 0 and not error_analysis.patterns))
+    )
 
     user = (
         f"Service: {service} | Alert type: {alert_type}{release_note}\n"
         f"Root causes identified: {'; '.join(root_causes) or 'NONE — no concrete errors found'}\n\n"
         "Recommend ONE action: rollback / escalate / monitor / close.\n"
         "RULES:\n"
-        "- If root causes list is NONE or empty: do NOT recommend rollback. Use monitor or escalate.\n"
+        "- If root causes list is NONE or empty: do NOT recommend rollback. Use escalate.\n"
+        "- If error analysis failed or no error patterns were identified despite logs being available, "
+        "the appropriate action is ESCALATE — a human must investigate manually.\n"
         "- rollback requires concrete error evidence (non-empty root causes) in the alert window.\n"
-        "- Do NOT start your response with the action word — start with your reasoning. "
-        "The action word appears in the section header already."
+        "- Do NOT start your response with the action word — start with your reasoning.\n\n"
+        "You MUST end your response with exactly one line in this format, "
+        "on its own line, with no trailing characters:\n\n"
+        "ACTION: <rollback|escalate|monitor|close>\n\n"
+        "Do not add anything after that line."
     )
     return {
         "system": (
             "You are an SRE on call making an incident decision. "
-            "Be decisive and concise. End your paragraph with one of: "
-            "Therefore: rollback / escalate / monitor / close."
+            "Be decisive and concise. "
+            "When evidence is missing or analysis failed, bias toward ESCALATE."
         ),
         "user": user,
     }
@@ -161,21 +193,37 @@ def build_markdown_report(
 ) -> str:
     sections: list[str] = []
 
-    # Warning admonition if any evidence failed to parse
-    any_failed = any(
-        getattr(obj, "parse_failed", False)
-        for obj in (error_analysis, metrics_analysis, release_errors)
-        if obj is not None
-    )
-    if any_failed:
-        sections.append(
-            "> ⚠️ **Some evidence could not be parsed** — verify by clicking the log link."
-        )
+    # Build warning block — prepended right after the title
+    warnings: list[str] = []
 
-    # 1. Header
-    sections.append(f"# Incident {incident_id}\n\n"
-                    f"**Service:** `{service}`  |  **Project:** `{project}`  |  "
-                    f"**Alert time:** {alert_ts}")
+    if error_analysis is not None:
+        if error_analysis.parse_failed:
+            warnings.append(
+                f"⚠️ **Evidence parsing failed** — the LLM produced malformed output "
+                f"for log analysis. Manual review required. "
+                f"[Inspect logs]({log_url})"
+            )
+        elif error_analysis.raw_log_count > 0 and not error_analysis.patterns:
+            warnings.append(
+                f"⚠️ **{error_analysis.raw_log_count} log entries were fetched but no "
+                f"error patterns were extracted.** Likely an LLM analysis failure. "
+                f"[Inspect logs]({log_url})"
+            )
+
+    if metrics_analysis is not None and getattr(metrics_analysis, "parse_failed", False):
+        warnings.append("⚠️ **Metrics evidence parsing failed.** Manual review required.")
+
+    if release_errors is not None and release_errors.parse_failed:
+        warnings.append("⚠️ **Release log evidence parsing failed.** Manual review required.")
+
+    # 1. Header + warning block (immediately after title)
+    warning_block = ("\n".join(warnings) + "\n\n---\n\n") if warnings else ""
+    sections.append(
+        f"# Incident {incident_id}\n\n"
+        f"**Service:** `{service}`  |  **Project:** `{project}`  |  "
+        f"**Alert time:** {alert_ts}\n\n"
+        + warning_block
+    )
 
     # 2. Impact
     sections.append(f"## Impact\n\n{impact_paragraph}")

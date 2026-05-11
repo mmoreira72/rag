@@ -30,6 +30,21 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import TypedDict, Literal
 
+_DEBUG_DIR = Path("/tmp/incident_graph_debug")
+
+
+def _save_failed_response(node_name: str, raw: str, system: str = "", user: str = "") -> str:
+    """Save a failed LLM response for post-mortem debugging. Returns the file path."""
+    _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+    path = _DEBUG_DIR / f"{node_name}_{ts}.txt"
+    path.write_text(
+        f"=== SYSTEM ===\n{system}\n\n"
+        f"=== USER ===\n{user[:2000]}\n\n"
+        f"=== RAW RESPONSE ===\n{raw}\n"
+    )
+    return str(path)
+
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -420,7 +435,9 @@ def fetch_errors(state: IncidentState) -> dict:
         items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
         analysis = ErrorAnalysis(patterns=items or [], raw_log_count=len(all_logs))
     except Exception as exc:
+        debug_path = _save_failed_response("fetch_errors", raw, system, combined[:2000])
         print(f"  [fetch_errors] validation failed: {exc}")
+        print(f"  [fetch_errors] raw response saved to {debug_path}")
         analysis = ErrorAnalysis(parse_failed=True, raw_log_count=len(all_logs))
     # Propagate the resolved project so build_report uses the right log URLs
     return {"error_logs": analysis, "project": project}
@@ -587,7 +604,9 @@ Return JSON: {{"observations": [{{"metric": "...", "trend": "...", "likely_cause
             subscription_not_found=not_found,
         )
     except Exception as exc:
+        debug_path = _save_failed_response("fetch_metrics", raw, system, compact[:2000])
         print(f"  [fetch_metrics] validation failed: {exc}")
+        print(f"  [fetch_metrics] raw response saved to {debug_path}")
         analysis = MetricsAnalysis(
             parse_failed=True,
             condition_direction=condition_direction,
@@ -708,7 +727,9 @@ Return JSON: {{"patterns": [{{"count": N, "message": "...", "first_seen": "ISO86
         items = parsed.get("patterns") if isinstance(parsed, dict) else (parsed if isinstance(parsed, list) else [])
         analysis = ErrorAnalysis(patterns=items or [])
     except Exception as exc:
+        debug_path = _save_failed_response("fetch_release_logs", raw, system, logs_raw[:2000])
         print(f"  [fetch_release_logs] validation failed: {exc}")
+        print(f"  [fetch_release_logs] raw response saved to {debug_path}")
         analysis = ErrorAnalysis(parse_failed=True)
     return {"release_logs": analysis}
 
@@ -998,7 +1019,9 @@ Return JSON: {{"findings": [{{"slo_id": "...", "slo_type": "availability|latency
             console_url=console_url,
         )
     except Exception as exc:
+        debug_path = _save_failed_response("fetch_slo", raw, system, compact[:2000])
         print(f"  [fetch_slo] validation failed: {exc}")
+        print(f"  [fetch_slo] raw response saved to {debug_path}")
         analysis = SLOAnalysis(parse_failed=True, console_url=console_url)
 
     error_analysis = ErrorAnalysis(patterns=[
