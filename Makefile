@@ -48,6 +48,16 @@ help:
 	@echo ""
 	@echo "  make install        força resolução das dependências (uv)"
 	@echo "  make clean          remove caches Python"
+	@echo ""
+	@echo "  --- Incident Investigation (hostel-agent branch) ---"
+	@echo "  make local-up                sobe pgvector isolado em localhost:5435"
+	@echo "  make local-down              derruba pgvector local"
+	@echo "  make local-ingest-skills     re-indexa investigation-skills/ no pgvector local"
+	@echo "  make local-mcp               MCP server apontando para localhost:5435"
+	@echo "  make local-alerts            lista alert policies do MON_PROJECT"
+	@echo "  make local-fetch-alert N=<N> investiga policy pelo índice (ex: N=13)"
+	@echo "  make local-incident          roda o grafo LangGraph com fixture de sample"
+	@echo "  make local-graph             imprime estrutura do grafo (Mermaid + ASCII)"
 
 # ---------- docker ----------
 up:

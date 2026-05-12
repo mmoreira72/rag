@@ -23,7 +23,7 @@ LLM_JSON_FORMAT = os.getenv("LLM_JSON_FORMAT", "0") == "1"
 # Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
 # Produção (servidor GPU): qwen2.5:14b
 # Default model (used as fallback and in LLM_TIERS when not overridden per-tier).
-CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-4-e4b")
+CHAT_MODEL = os.getenv("CHAT_MODEL", "qwen/qwen2.5-coder-14b")
 
 # Per-tier model overrides — set to empty string to fall back to CHAT_MODEL.
 # LM Studio swaps models on demand (one at a time); expect ~10-30s per swap.

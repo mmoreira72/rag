@@ -135,21 +135,22 @@ def _build_action_prompt(state: dict) -> dict:
             "Rollback may be appropriate if it caused the incident."
         )
 
-    evidence_missing = not root_causes and (
-        isinstance(error_analysis, ErrorAnalysis) and
-        (error_analysis.parse_failed or
-         (error_analysis.raw_log_count > 0 and not error_analysis.patterns))
-    )
+    verdict = error_analysis.verdict if isinstance(error_analysis, ErrorAnalysis) else ""
+    evidence_missing = isinstance(error_analysis, ErrorAnalysis) and error_analysis.parse_failed
+
+    verdict_line = f"Log analysis verdict: {verdict}\n" if verdict else ""
 
     user = (
         f"Service: {service} | Alert type: {alert_type}{release_note}\n"
+        f"{verdict_line}"
         f"Root causes identified: {'; '.join(root_causes) or 'NONE — no concrete errors found'}\n\n"
         "Recommend ONE action: rollback / escalate / monitor / close.\n"
         "RULES:\n"
-        "- If root causes list is NONE or empty: do NOT recommend rollback. Use escalate.\n"
-        "- If error analysis failed or no error patterns were identified despite logs being available, "
-        "the appropriate action is ESCALATE — a human must investigate manually.\n"
-        "- rollback requires concrete error evidence (non-empty root causes) in the alert window.\n"
+        "- verdict 'false_positive' or 'expected_behaviour' → CLOSE (service is working correctly, no action needed).\n"
+        "- verdict 'no_root_cause' with no root causes → ESCALATE.\n"
+        "- If evidence parsing failed (parse error) → ESCALATE — a human must review manually.\n"
+        "- rollback requires concrete root causes in the alert window.\n"
+        "- If root causes present and a release was deployed → consider rollback.\n"
         "- Do NOT start your response with the action word — start with your reasoning.\n\n"
         "You MUST end your response with exactly one line in this format, "
         "on its own line, with no trailing characters:\n\n"
@@ -160,7 +161,8 @@ def _build_action_prompt(state: dict) -> dict:
         "system": (
             "You are an SRE on call making an incident decision. "
             "Be decisive and concise. "
-            "When evidence is missing or analysis failed, bias toward ESCALATE."
+            "When evidence is missing or analysis failed, bias toward ESCALATE. "
+            "When the log analysis verdict is false_positive or expected_behaviour, the correct action is CLOSE."
         ),
         "user": user,
     }
