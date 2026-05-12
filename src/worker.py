@@ -19,7 +19,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 
-from chat import ask
+from seliga_ask import ask
 from job_queue import dequeue, get_job, update_job
 from llm_client import warmup_llm_models
 
