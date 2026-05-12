@@ -32,10 +32,14 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
         # Grafo pausado em interrupt — participante está respondendo a um campo
         result = _graph.invoke(Command(resume=message), config)
     else:
-        # Nova conversa ou fluxo anterior já encerrou
+        # Query augmentation: concatena última mensagem do checkpoint para melhorar
+        # retrieval em follow-ups curtos ("o que são missões?" após "o que é Conectados?")
+        last_msg = state.values.get("mensagem_participante", "") if state.values else ""
+        rag_query = f"{last_msg} {message}".strip() if last_msg else message
+
         initial: SeligaState = {
             "numero_atendimento":    session_id,
-            "mensagem_participante": message,
+            "mensagem_participante": rag_query,
             "autenticado":           autenticado,
             "skill_name":   "",
             "skill_body":   "",
