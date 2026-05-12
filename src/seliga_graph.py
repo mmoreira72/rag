@@ -119,6 +119,10 @@ class SeligaState(TypedDict):
     # Contexto de documentos (fallback quando sem skill)
     docs_contexto: str
 
+    # Query de retrieval (pode ser augmentada com mensagem anterior para RAG)
+    # O LLM sempre usa mensagem_participante; rag_query só é usada na busca vetorial.
+    rag_query: str
+
     # Mensagem final para o participante
     resposta_final: str
 
@@ -160,7 +164,7 @@ def _call_llm(system: str, user: str) -> str:
 # ── Nodes ────────────────────────────────────────────────────────────────────
 
 def identificar_skill(state: SeligaState) -> dict:
-    name, body, score = _get_skill(state["mensagem_participante"])
+    name, body, score = _get_skill(state.get("rag_query") or state["mensagem_participante"])
 
     # Área pública: rejeita skills que exigem login
     if name and not state.get("autenticado") and name not in SKILLS_PUBLICAS:
@@ -315,7 +319,7 @@ def tentar_resolver(state: SeligaState) -> dict:
 def buscar_documentos(state: SeligaState) -> dict:
     """Fallback autônomo: busca documentos quando nenhuma skill cobre a pergunta."""
     DOC_MIN_SCORE = 0.55  # threshold pós-reranker (igual ao chat.py)
-    query = state["mensagem_participante"]
+    query = state.get("rag_query") or state["mensagem_participante"]
     qvec = embed([query])[0]
     raw = search_documents(qvec, TOP_K_RETRIEVE_DOCS)
 

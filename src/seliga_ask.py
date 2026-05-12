@@ -32,14 +32,15 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
         # Grafo pausado em interrupt — participante está respondendo a um campo
         result = _graph.invoke(Command(resume=message), config)
     else:
-        # Query augmentation: concatena última mensagem do checkpoint para melhorar
-        # retrieval em follow-ups curtos ("o que são missões?" após "o que é Conectados?")
+        # Query augmentation apenas para retrieval — mensagem_participante fica original
+        # para o LLM responder a pergunta certa, não a anterior.
         last_msg = state.values.get("mensagem_participante", "") if state.values else ""
         rag_query = f"{last_msg} {message}".strip() if last_msg else message
 
         initial: SeligaState = {
             "numero_atendimento":    session_id,
-            "mensagem_participante": rag_query,
+            "mensagem_participante": message,   # original — LLM responde a esta
+            "rag_query":             rag_query, # augmentada — usada apenas no retrieval
             "autenticado":           autenticado,
             "skill_name":   "",
             "skill_body":   "",
