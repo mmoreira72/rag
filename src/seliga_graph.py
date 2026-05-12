@@ -37,7 +37,7 @@ from db import search_skills, search_documents, insert_escalada
 from embeddings import embed
 from reranker import rerank
 
-SKILL_MIN_SCORE = 0.55
+SKILL_MIN_SCORE = 0.65
 
 llm = ChatOpenAI(
     base_url=LLM_BASE_URL,
