@@ -203,9 +203,9 @@ def coletar_dados(state: SeligaState) -> dict:
 
 
 LABEL_CAMPO = {
-    "icare":          "código ICARE",
+    "icare":          "código ICARE (número de matrícula do colaborador no programa Se Liga na SKY)",
     "cpf":            "CPF",
-    "mes_referencia": "mês de referência dos pontos",
+    "mes_referencia": "mês de referência dos pontos (ex: janeiro/2025)",
 }
 
 
