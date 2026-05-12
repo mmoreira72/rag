@@ -119,6 +119,10 @@ class SeligaState(TypedDict):
     # Contexto de documentos (fallback quando sem skill)
     docs_contexto: str
 
+    # Lista estruturada dos docs usados (para logging/observabilidade).
+    # Populada por buscar_documentos quando há match; vazia caso contrário.
+    docs_usados: list
+
     # Query de retrieval (pode ser augmentada com mensagem anterior para RAG)
     # O LLM sempre usa mensagem_participante; rag_query só é usada na busca vetorial.
     rag_query: str
@@ -354,7 +358,11 @@ def buscar_documentos(state: SeligaState) -> dict:
         f"--- {src} (score {score:.2f}) ---\n{content}"
         for src, _idx, content, score in docs
     )
-    return {"docs_contexto": contexto}
+    docs_usados = [
+        {"source": src, "chunk_index": idx, "score": round(float(score), 4)}
+        for src, idx, _content, score in docs
+    ]
+    return {"docs_contexto": contexto, "docs_usados": docs_usados}
 
 
 def responder_com_docs(state: SeligaState) -> dict:

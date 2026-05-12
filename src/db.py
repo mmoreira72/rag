@@ -172,6 +172,83 @@ def mark_escalada_failed(escalada_id: int) -> None:
         conn.commit()
 
 
+def insert_decisao(
+    *,
+    numero_atendimento: str,
+    session_id: str,
+    mensagem: str,
+    autenticado: bool,
+    skill_name: str | None,
+    skill_score: float | None,
+    rota: str,
+    docs_usados: list | None,
+    interrupt_disparado: bool,
+    resposta_final: str | None,
+    escalada_id: int | None,
+    resolveu: bool | None,
+) -> tuple[int, int]:
+    """Grava uma decisão do grafo. Retorna (id, turno_idx).
+
+    Observabilidade pura — qualquer falha aqui é absorvida pelo caller, nunca
+    deve quebrar o fluxo de atendimento.
+    """
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(MAX(turno_idx), 0) + 1 FROM decisoes WHERE numero_atendimento = %s",
+            (numero_atendimento,),
+        )
+        turno_idx = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            INSERT INTO decisoes (
+                numero_atendimento, session_id, turno_idx,
+                mensagem, autenticado,
+                skill_name, skill_score, rota, docs_usados, interrupt_disparado,
+                resposta_final, escalada_id, resolveu
+            ) VALUES (
+                %s, %s, %s,
+                %s, %s,
+                %s, %s, %s, %s::jsonb, %s,
+                %s, %s, %s
+            )
+            RETURNING id
+            """,
+            (
+                numero_atendimento, session_id, turno_idx,
+                mensagem, autenticado,
+                skill_name, skill_score, rota,
+                json.dumps(docs_usados) if docs_usados is not None else None,
+                interrupt_disparado,
+                resposta_final, escalada_id, resolveu,
+            ),
+        )
+        decisao_id = cur.fetchone()[0]
+        conn.commit()
+        return decisao_id, turno_idx
+
+
+def update_feedback_proximo(numero_atendimento: str, turno_idx: int, feedback: str) -> None:
+    """Anota no turno anterior a mensagem subsequente do participante.
+
+    Se chamado com turno_idx <= 0 (primeiro turno), não faz nada.
+    """
+    if turno_idx <= 0:
+        return
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE decisoes
+               SET feedback_proximo = %s
+             WHERE numero_atendimento = %s
+               AND turno_idx = %s
+               AND feedback_proximo IS NULL
+            """,
+            (feedback, numero_atendimento, turno_idx),
+        )
+        conn.commit()
+
+
 def get_pending_escaladas() -> list:
     """Retorna todas as escaladas com status=pending (para o worker externo)."""
     with connect() as conn, conn.cursor() as cur:

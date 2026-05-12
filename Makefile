@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy migrate test
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -34,6 +34,9 @@ help:
 	@echo "  make fetch-docs     baixa documentação externa (GitHub, MySQL, GCP)"
 	@echo "  make mcp-serve      sobe o servidor MCP (stdio) para clientes externos"
 	@echo "  make debug Q=\"...\"  inspeciona o retrieval para uma query"
+	@echo ""
+	@echo "  make migrate        aplica migrations idempotentes em src/migrations/"
+	@echo "  make test           roda a suíte de testes (pytest)"
 	@echo ""
 	@echo "  make api            builda e sobe API + worker + Redis + Postgres"
 	@echo "  make api-build      apenas (re)builda a imagem"
@@ -74,6 +77,20 @@ reset-db:
 	@echo "Aguardando Postgres iniciar..."
 	@sleep 5
 	@echo "Pronto. Schema recriado a partir de src/init.sql."
+
+# Aplica migrations idempotentes (uma a uma, em ordem alfabética).
+# Use em produção, quando o pgdata já existe e o init.sql NÃO vai rodar de novo.
+# Em dev, `make reset-db` já contempla as migrations via init.sql.
+migrate:
+	@for f in $$(ls src/migrations/*.sql | sort); do \
+		echo "→ aplicando $$f"; \
+		docker exec -i local-rag-db psql -U rag -d rag < $$f || exit 1; \
+	done
+	@echo "Migrations aplicadas."
+
+# Roda a suíte de testes — requer Postgres no ar (make up).
+test:
+	$(PY) -m pytest tests/ -v
 
 # ---------- python / rag ----------
 install:
