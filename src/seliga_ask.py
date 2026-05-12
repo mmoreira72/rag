@@ -51,8 +51,14 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
         }
         result = _graph.invoke(initial, config)
 
-    answer = (result or {}).get("resposta_final", "")
-    skill_name = (result or {}).get("skill_name", "")
+    # Verifica se o grafo pausou em interrupt após o invoke
+    state_after = _graph.get_state(config)
+    if state_after.next and state_after.tasks:
+        interrupts = state_after.tasks[0].interrupts
+        answer = interrupts[0].value if interrupts else ""
+    else:
+        answer = (result or {}).get("resposta_final", "")
 
+    skill_name = (result or {}).get("skill_name", "")
     sources = [{"type": "skill", "name": skill_name}] if skill_name else []
     return {"answer": answer, "sources": sources}
