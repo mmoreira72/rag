@@ -210,15 +210,13 @@ LABEL_CAMPO = {
 
 
 def solicitar_dados(state: SeligaState) -> dict:
-    """Pede ao participante os campos faltantes via interrupt, usando LLM para formular."""
+    """Pede ao participante os campos faltantes via template determinístico."""
     labels = [LABEL_CAMPO.get(c, c) for c in state["campos_faltando"]]
-    pergunta = _call_llm(
-        _IDENTIDADE
-        + "Escreva UMA mensagem curta e natural, em português, pedindo as informações listadas. "
-        "Tom: WhatsApp, amigável. Não use bullet points nem listas. Só a mensagem, sem aspas.",
-        f"O participante disse: \"{state['mensagem_participante']}\"\n"
-        f"Informações que preciso coletar: {', '.join(labels)}.",
-    )
+    if len(labels) == 1:
+        pergunta = f"Para encaminhar para o SAC, preciso do seu {labels[0]}. Pode me informar?"
+    else:
+        *outros, ultimo = labels
+        pergunta = f"Para encaminhar para o SAC, preciso de: {', '.join(outros)} e {ultimo}. Pode me informar?"
     resposta = interrupt(pergunta)
     dados_atualizados = {**state.get("dados", {})}
 
