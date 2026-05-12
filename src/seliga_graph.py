@@ -314,14 +314,30 @@ def tentar_resolver(state: SeligaState) -> dict:
 
 def buscar_documentos(state: SeligaState) -> dict:
     """Fallback autônomo: busca documentos quando nenhuma skill cobre a pergunta."""
-    DOC_MIN_SCORE = 0.50
-    qvec = embed([state["mensagem_participante"]])[0]
+    DOC_MIN_SCORE = 0.55  # threshold pós-reranker (igual ao chat.py)
+    query = state["mensagem_participante"]
+    qvec = embed([query])[0]
     raw = search_documents(qvec, TOP_K_RETRIEVE_DOCS)
-    docs = [d for d in raw[:TOP_K_DOCS] if d[3] >= DOC_MIN_SCORE]
 
-    # Área pública: usa apenas o documento de não-logado
+    # Área pública: filtra antes do reranker para não pagar custo com docs irrelevantes
     if not state.get("autenticado"):
-        docs = [d for d in docs if DOC_NAO_LOGADO in d[0]]
+        raw = [d for d in raw if DOC_NAO_LOGADO in d[0]]
+
+    if not raw:
+        return {
+            "docs_contexto": "",
+            "resposta_final": (
+                "Não encontrei informações sobre esse assunto na minha base de conhecimento. "
+                "Pode descrever melhor o que está acontecendo?"
+            ),
+        }
+
+    if USE_RERANKER:
+        texts = [f"{src}\n{content}" for src, _idx, content, _score in raw]
+        ranked = rerank(query, texts, top_k=TOP_K_DOCS)
+        docs = [(raw[i][0], raw[i][1], raw[i][2], score) for i, score in ranked if score >= DOC_MIN_SCORE]
+    else:
+        docs = [d for d in raw[:TOP_K_DOCS] if d[3] >= DOC_MIN_SCORE]
     if not docs:
         return {
             "docs_contexto": "",
