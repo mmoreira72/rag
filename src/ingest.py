@@ -21,12 +21,41 @@ def iter_files(root: str):
 
 
 def chunk_text(text: str, size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
+    """Divide o texto em chunks respeitando parágrafos.
+
+    Agrupa parágrafos consecutivos até `size` chars. Quando um parágrafo
+    sozinho excede `size`, faz o fallback de sliding window. O overlap
+    inclui o último parágrafo do chunk anterior para preservar contexto.
+    """
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks = []
-    i = 0
-    n = len(text)
-    while i < n:
-        chunks.append(text[i:i + size])
-        i += size - overlap
+    current_parts: list[str] = []
+    current_len = 0
+
+    for para in paragraphs:
+        para_len = len(para)
+        if current_len + para_len > size and current_parts:
+            chunks.append("\n\n".join(current_parts))
+            # overlap: mantém o último parágrafo para contexto
+            current_parts = current_parts[-1:]
+            current_len = len(current_parts[0])
+
+        if para_len > size:
+            # parágrafo enorme: sliding window como fallback
+            if current_parts:
+                chunks.append("\n\n".join(current_parts))
+                current_parts, current_len = [], 0
+            i = 0
+            while i < para_len:
+                chunks.append(para[i:i + size])
+                i += size - overlap
+        else:
+            current_parts.append(para)
+            current_len += para_len
+
+    if current_parts:
+        chunks.append("\n\n".join(current_parts))
+
     return chunks
 
 
