@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import TypedDict, Literal
 
@@ -47,11 +48,14 @@ llm = ChatOpenAI(
     max_tokens=1024,
 )
 
-_IDENTIDADE = (
-    "Você é um atendente virtual do programa Se Liga na SKY — um programa de INCENTIVO "
-    "E PONTUAÇÃO para colaboradores. NÃO é um serviço de telecomunicações. Não pergunte "
-    "sobre operadora, contrato de telefonia, linha, plano ou serviço de TV. "
-)
+def _IDENTIDADE() -> str:
+    today = date.today().strftime("%d/%m/%Y")
+    return (
+        "Você é um atendente virtual do programa Se Liga na SKY — um programa de INCENTIVO "
+        "E PONTUAÇÃO para colaboradores. NÃO é um serviço de telecomunicações. Não pergunte "
+        "sobre operadora, contrato de telefonia, linha, plano ou serviço de TV. "
+        f"Data de hoje: {today}. Use esta data como referência para qualquer cálculo de prazo. "
+    )
 
 MENSAGEM_ENCAMINHAMENTO = (
     "Para te ajudar com esse assunto, preciso de algumas informações que só o nosso "
@@ -275,7 +279,7 @@ def escalar_sac(state: SeligaState) -> dict:
 def responder_direto(state: SeligaState) -> dict:
     """Skills autonomo: LLM responde com base no conteúdo da skill, sem escalar."""
     resposta = _call_llm(
-        _IDENTIDADE
+        _IDENTIDADE()
         + "Use a skill abaixo para responder ao participante de forma natural e amigável, "
         "como uma mensagem de WhatsApp. Seja direto e objetivo. "
         "Responda sempre em português do Brasil.",
@@ -293,7 +297,7 @@ def tentar_resolver(state: SeligaState) -> dict:
     Passo 3: LLM classifica se resolveu ou precisa de escalada.
     """
     orientacao = _call_llm(
-        _IDENTIDADE
+        _IDENTIDADE()
         + "Use a seção 'Orientação inicial' da skill para guiar o participante de forma clara, "
         "como uma mensagem de WhatsApp. Ao final, pergunte brevemente se conseguiu resolver. "
         "Tom: amigável, direto. Responda em português do Brasil.",
@@ -360,7 +364,7 @@ def buscar_documentos(state: SeligaState) -> dict:
 def responder_com_docs(state: SeligaState) -> dict:
     """Responde usando contexto de documentos (FAQ, Regulamento, etc.)."""
     resposta = _call_llm(
-        _IDENTIDADE
+        _IDENTIDADE()
         + "Use o contexto abaixo para responder ao participante de forma natural e amigável, "
         "como uma mensagem de WhatsApp. Seja objetivo. Responda em português do Brasil.",
         f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
