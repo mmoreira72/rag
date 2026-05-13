@@ -307,17 +307,22 @@ def tentar_resolver(state: SeligaState) -> dict:
     )
     resposta_usuario = interrupt(orientacao)
 
-    # Classifica se o participante resolveu ou ainda precisa de ajuda
+    # Classifica se o participante ainda precisa de ajuda, com contexto da pergunta
     classificacao = _call_llm(
-        "Classifique a resposta do participante após receber uma orientação. "
-        "Responda APENAS com uma palavra: RESOLVIDO ou AJUDA",
+        "Classifique se o participante ainda precisa de ajuda humana, "
+        "considerando a pergunta feita e a resposta dada. "
+        "Exemplos: 'Passou o prazo?' + 'Não' → RESOLVIDO (prazo não passou, deve aguardar). "
+        "'Conseguiu resolver?' + 'Sim' → RESOLVIDO. "
+        "'Ainda não apareceu?' + 'Sim' → AJUDA. "
+        "Responda APENAS com uma palavra: RESOLVIDO ou AJUDA.",
+        f"Pergunta ao participante: \"{orientacao}\"\n"
         f"Resposta do participante: \"{resposta_usuario}\"",
     )
     resolvido = "RESOLVIDO" in classificacao.upper()
     return {
         "resposta_participante": resposta_usuario,
         "guiado_resolvido": resolvido,
-        "resposta_final": "Fico feliz que tenha conseguido! Se precisar de mais alguma coisa, é só chamar." if resolvido else "",
+        "resposta_final": "Entendido! Se ainda precisar de alguma coisa, é só chamar." if resolvido else "",
     }
 
 
