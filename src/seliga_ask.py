@@ -51,6 +51,7 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
             "guiado_resolvido":  False,
             "escalada_id":       0,
             "docs_contexto":     "",
+            "docs_sources":      [],
             "resposta_final":    "",
             "rota":              "coletar",
         }
@@ -66,5 +67,8 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
 
     skill_name  = (result or {}).get("skill_name", "")
     skill_score = (result or {}).get("skill_score", 0.0)
-    sources = [{"type": "skill", "name": skill_name, "score": skill_score}] if skill_name else []
+    if skill_name:
+        sources = [{"type": "skill", "name": skill_name, "score": skill_score}]
+    else:
+        sources = (result or {}).get("docs_sources", [])
     return {"answer": answer, "sources": sources}

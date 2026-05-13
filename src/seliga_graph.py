@@ -122,6 +122,7 @@ class SeligaState(TypedDict):
 
     # Contexto de documentos (fallback quando sem skill)
     docs_contexto: str
+    docs_sources: list  # [{source, score}] para retornar ao cliente
 
     # Query de retrieval (pode ser augmentada com mensagem anterior para RAG)
     # O LLM sempre usa mensagem_participante; rag_query só é usada na busca vetorial.
@@ -358,7 +359,8 @@ def buscar_documentos(state: SeligaState) -> dict:
         f"--- {src} (score {score:.2f}) ---\n{content}"
         for src, _idx, content, score in docs
     )
-    return {"docs_contexto": contexto}
+    sources = [{"type": "doc", "source": src, "score": round(score, 4)} for src, _idx, _content, score in docs]
+    return {"docs_contexto": contexto, "docs_sources": sources}
 
 
 def responder_com_docs(state: SeligaState) -> dict:
