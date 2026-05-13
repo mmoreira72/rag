@@ -367,8 +367,9 @@ def responder_com_docs(state: SeligaState) -> dict:
     """Responde usando contexto de documentos (FAQ, Regulamento, etc.)."""
     resposta = _call_llm(
         _IDENTIDADE()
-        + "Use o contexto abaixo para responder ao participante de forma natural e amigável, "
-        "como uma mensagem de WhatsApp. Seja objetivo. Responda em português do Brasil.",
+        + "Responda SOMENTE com base no contexto fornecido abaixo. "
+        "NÃO use conhecimento geral — se o contexto não contiver a informação, diga que não sabe. "
+        "Seja natural e amigável, como uma mensagem de WhatsApp. Responda em português do Brasil.",
         f"Mensagem do participante: \"{state['mensagem_participante']}\"\n\n"
         f"Contexto:\n{state['docs_contexto']}",
     )
