@@ -93,7 +93,7 @@ SKILLS_PUBLICAS = {
 }
 
 # Documento exclusivo para usuários não autenticados
-DOC_NAO_LOGADO = "SAC - SE LIGA NA SKY - não logado"
+DOC_NAO_LOGADO = "não logado"
 
 
 class SeligaState(TypedDict):
