@@ -274,10 +274,10 @@ def fetch_errors(state: IncidentState) -> dict:
 
     # skill retrieval dinâmico baseado no tipo de recurso
     skill_query = {
-        "cloud_run_revision":  "gcloud logging read error Cloud Run service",
-        "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages",
-        "cloudsql_database":   "Cloud SQL error logs slow query",
-    }.get(rtype, "gcloud logging read error logs GCP")
+        "cloud_run_revision":  "Cloud Run service HTTP errors OOM liveness probe health check noise",
+        "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
+        "cloudsql_database":   "Cloud SQL slow query lock contention missing index replication",
+    }.get(rtype, "GCP service incident investigation root cause")
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
 
@@ -327,13 +327,13 @@ Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cau
 def fetch_metrics(state: IncidentState) -> dict:
     """Para alertas metric-based: consulta time series e descreve o recurso."""
     skill_query_map = {
-        "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages drain",
-        "cloudsql_database":   "Cloud SQL replication lag slow query operations",
+        "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
+        "cloudsql_database":   "Cloud SQL slow query lock contention missing index replication",
         "gce_instance":        "GCE instance CPU memory disk metrics",
     }
     skill_query = skill_query_map.get(
         state.get("resource_type", ""),
-        "GCP metrics throughput monitoring alert"
+        "GCP service incident investigation root cause"
     )
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
@@ -483,7 +483,7 @@ Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_ca
 
 def check_release(state: IncidentState) -> dict:
     """Verifica se houve release no Cloud Deploy na hora anterior ao alerta."""
-    skill_result = get_skills_with_confidence("Cloud Deploy release rollout history timestamp")
+    skill_result = get_skills_with_confidence("Cloud Run revision release rollout deploy history timestamp")
     skill_context = format_skills_for_prompt(skill_result)  # noqa: F841 — used if LLM call added later
 
     alert_dt     = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
@@ -556,7 +556,7 @@ def fetch_release_logs(state: IncidentState) -> dict:
     if not state.get("release_ts"):
         return {"release_logs": "[]"}
 
-    skill_result = get_skills_with_confidence("gcloud logging read error logs Cloud Run service")
+    skill_result = get_skills_with_confidence("Cloud Run service HTTP errors OOM liveness probe health check noise")
     skill_context = format_skills_for_prompt(skill_result)
 
     rel_dt = datetime.fromisoformat(state["release_ts"].replace("Z", "+00:00"))
@@ -593,7 +593,7 @@ Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
 
 def build_report(state: IncidentState) -> dict:
     """Monta o relatório de incidente com toda a informação recolhida."""
-    skill_result = get_skills_with_confidence("incident report template SRE post-mortem")
+    skill_result = get_skills_with_confidence("GCP incident report template SRE post-mortem root cause")
     skill_context = format_skills_for_prompt(skill_result)
 
     project    = state.get("project", "")
@@ -721,7 +721,7 @@ def decide(state: IncidentState) -> dict:
 
 def fetch_slo(state: IncidentState) -> dict:
     """Para alertas SLO burn rate: consulta compliance e error budget via REST API."""
-    skill_result = get_skills_with_confidence("SLO burn rate error budget availability latency")
+    skill_result = get_skills_with_confidence("SLO burn rate error budget availability latency Cloud Run")
     skill_context = format_skills_for_prompt(skill_result)
 
     monitoring_project = state.get("project") or "hw-prod-svc-sre-mon-a1f1"

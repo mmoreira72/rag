@@ -73,6 +73,9 @@ def main():
         references_dir = skill_dir / "references"
         has_references = references_dir.is_dir() and any(references_dir.glob("*.md"))
 
+        patterns_dir = skill_dir / "patterns"
+        has_patterns = patterns_dir.is_dir() and any(patterns_dir.glob("*.md"))
+
         if has_references:
             # Ingerir cada reference como skill individual; ignorar o SKILL.md
             print(f"[{skill_dir.name}] → references individuais:")
@@ -97,8 +100,32 @@ def main():
                 print(f"  ✓ {name}")
                 count += 1
 
+        elif has_patterns:
+            # Ingerir cada pattern como skill individual; ignorar o SKILL.md
+            print(f"[{skill_dir.name}] → patterns individuais:")
+            for ref_md in sorted(patterns_dir.glob("*.md")):
+                text = ref_md.read_text(encoding="utf-8")
+
+                name, description, body = parse_frontmatter(text)
+
+                if not name:
+                    name = f"{skill_dir.name}/{ref_md.stem}"
+                if not description:
+                    description = extract_description(text)
+                if not description:
+                    description = name
+
+                if len(body.strip()) < STUB_MIN_CHARS:
+                    print(f"  ⤷ skip stub: {name} ({len(body.strip())} chars)")
+                    continue
+
+                vec = embed_text(name, description, body)
+                upsert_skill(name, description, body, vec)
+                print(f"  ✓ {name}")
+                count += 1
+
         else:
-            # Sem references — ingere o SKILL.md como skill única
+            # Sem references nem patterns — ingere o SKILL.md como skill única
             skill_md = skill_dir / "SKILL.md"
             if not skill_md.exists():
                 continue
