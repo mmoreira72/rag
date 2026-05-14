@@ -121,7 +121,7 @@ mcp-serve:
 # Variáveis sobrescrevíveis:
 #   SKILLS_DIR — path para o repo cloudengineerskills (default: ~/cloudengineerskills/skills)
 #   LOCAL_PG   — DSN do pgvector local
-SKILLS_DIR ?= $(HOME)/cloudengineerskills/skills
+SKILLS_DIR ?= $(HOME)/Library/CloudStorage/OneDrive-Hostelworld/Documents/personal/cloudengineerskills/investigation-skills
 LOCAL_PG   := postgresql://rag:rag@localhost:5435/rag
 # Força Python 3.14 (Homebrew) para os targets locais — evita o 3.9.6 do sistema
 LOCAL_PY   := uv run --python python3.14 --with-requirements "$(REQS)" python
@@ -161,7 +161,7 @@ local-alerts:
 
 local-fetch-alert:
 	@echo "Investigando policy #$(N) em $(MON_PROJECT)..."
-	cd src && MON_PROJECT="$(MON_PROJECT)" N="$(N)" $(LOCAL_PY) fetch_alert.py
+	cd src && PG_DSN="$(LOCAL_PG)" MON_PROJECT="$(MON_PROJECT)" N="$(N)" $(LOCAL_PY) fetch_alert.py
 
 local-incident:
 	@echo "Running incident graph with alert: $(abspath $(ALERT))"
