@@ -81,6 +81,11 @@ class IncidentState(TypedDict):
     release_type: str       # "cloud_run" | "optimizely" | ""
     release_logs: str
 
+    # Investigation traceability
+    skill_retrievals: list   # [{node, patterns:[{name,score}], confidence}] per node
+    scripts_invoked: list    # ["gcloud run revisions list", "optimizely logs", ...]
+    analysis_log_url: str    # exact GCP Logging URL used to fetch logs for LLM
+
     # Output
     report: str
     engineer_response: str  # preenchido após interrupt()
@@ -281,17 +286,19 @@ def fetch_errors(state: IncidentState) -> dict:
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
 
-    all_logs = _run_gcloud_logging(
-        (
-            f'resource.type="{rtype}"'
-            f' AND {resource_filter}'
-            f' AND timestamp>="{six_hours_ago}"'
-            f' AND timestamp<="{window_end}"'
-        ),
-        project,
-        limit=150,
-        label=f"6h:{rtype}",
+    log_filter = (
+        f'resource.type="{rtype}"'
+        f' AND {resource_filter}'
+        f' AND timestamp>="{six_hours_ago}"'
+        f' AND timestamp<="{window_end}"'
     )
+    import urllib.parse as _up
+    analysis_log_url = (
+        f"https://console.cloud.google.com/logs/query"
+        f";query={_up.quote(log_filter)}?project={project}"
+    )
+
+    all_logs = _run_gcloud_logging(log_filter, project, limit=150, label=f"6h:{rtype}")
 
     # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)
     log_lines = []
@@ -321,7 +328,21 @@ If OOM errors predate the liveness failures, mark them as root_cause=true.
 Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601", "root_cause": true/false}}]"""
 
     summary = call_llm(system, combined[:8000])
-    return {"error_logs": summary}
+
+    retrievals = list(state.get("skill_retrievals") or [])
+    retrievals.append({
+        "node": "fetch_errors",
+        "confidence": skill_result.confidence,
+        "patterns": [{"name": s.name, "score": round(s.score, 3)} for s in skill_result.skills],
+    })
+    return {
+        "error_logs": summary,
+        "skill_retrievals": retrievals,
+        "analysis_log_url": analysis_log_url,
+        "scripts_invoked": list(state.get("scripts_invoked") or []) + [
+            f"gcloud logging read (fetch_errors, {len(all_logs)} entries)"
+        ],
+    }
 
 
 def fetch_metrics(state: IncidentState) -> dict:
@@ -478,7 +499,25 @@ Identify: trend, when it deviated from normal, likely cause.
 Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]"""
 
     summary = call_llm(system, compact[:2000])
-    return {"metrics_data": summary, "error_logs": "", "project": project}
+
+    retrievals = list(state.get("skill_retrievals") or [])
+    retrievals.append({
+        "node": "fetch_metrics",
+        "confidence": skill_result.confidence,
+        "patterns": [{"name": s.name, "score": round(s.score, 3)} for s in skill_result.skills],
+    })
+    scripts = list(state.get("scripts_invoked") or []) + [
+        f"Monitoring REST API timeseries ({mtype})",
+    ]
+    if results.get("resource_describe"):
+        scripts.append(f"gcloud pubsub subscriptions describe ({service})")
+    return {
+        "metrics_data": summary,
+        "error_logs": "",
+        "project": project,
+        "skill_retrievals": retrievals,
+        "scripts_invoked": scripts,
+    }
 
 
 def check_release(state: IncidentState) -> dict:
@@ -507,6 +546,16 @@ def check_release(state: IncidentState) -> dict:
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
         revisions = []
 
+    scripts = list(state.get("scripts_invoked") or []) + [
+        f"gcloud run revisions list ({service}, {len(revisions)} found)"
+    ]
+    retrievals = list(state.get("skill_retrievals") or [])
+    retrievals.append({
+        "node": "check_release",
+        "confidence": skill_result.confidence,
+        "patterns": [{"name": s.name, "score": round(s.score, 3)} for s in skill_result.skills],
+    })
+
     for rev in revisions:
         created = rev.get("metadata", {}).get("creationTimestamp", "")
         if created and window_start <= created <= state["alert_ts"]:
@@ -515,6 +564,8 @@ def check_release(state: IncidentState) -> dict:
                 "release_id":    rev.get("metadata", {}).get("name", ""),
                 "release_ts":    created,
                 "release_type":  "cloud_run",
+                "skill_retrievals": retrievals,
+                "scripts_invoked": scripts,
             }
 
     # 2. Optimizely feature flag changes (Cloud Function logs in monitoring project)
@@ -534,6 +585,7 @@ def check_release(state: IncidentState) -> dict:
         label="optimizely",
     )
 
+    scripts.append(f"gcloud logging read optimizely-webhook ({len(opt_logs)} entries)")
     if opt_logs:
         first = opt_logs[0]
         payload = first.get("jsonPayload", {})
@@ -546,9 +598,15 @@ def check_release(state: IncidentState) -> dict:
             "release_id":    f"optimizely-rev-{rev} ({event})",
             "release_ts":    ts,
             "release_type":  "optimizely",
+            "skill_retrievals": retrievals,
+            "scripts_invoked": scripts,
         }
 
-    return {"release_found": False, "release_id": "", "release_ts": "", "release_type": ""}
+    return {
+        "release_found": False, "release_id": "", "release_ts": "", "release_type": "",
+        "skill_retrievals": retrievals,
+        "scripts_invoked": scripts,
+    }
 
 
 def fetch_release_logs(state: IncidentState) -> dict:
@@ -588,7 +646,20 @@ def fetch_release_logs(state: IncidentState) -> dict:
 Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
 
     summary = call_llm(system, logs_raw[:6000])
-    return {"release_logs": summary}
+
+    retrievals = list(state.get("skill_retrievals") or [])
+    retrievals.append({
+        "node": "fetch_release_logs",
+        "confidence": skill_result.confidence,
+        "patterns": [{"name": s.name, "score": round(s.score, 3)} for s in skill_result.skills],
+    })
+    return {
+        "release_logs": summary,
+        "skill_retrievals": retrievals,
+        "scripts_invoked": list(state.get("scripts_invoked") or []) + [
+            f"gcloud logging read (fetch_release_logs, ±30min of release)"
+        ],
+    }
 
 
 def build_report(state: IncidentState) -> dict:
@@ -674,6 +745,45 @@ Include: Impact, Timeline, Error/Metric Pattern, Release Correlation, Recommende
 End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
 
     report = call_llm(system, context[:5000])
+
+    # ── Deterministic evidence section (appended after LLM report) ──────────
+    evidence_lines = ["\n\n---\n\n## Investigation Evidence\n"]
+
+    # Patterns considered per node
+    retrievals = state.get("skill_retrievals") or []
+    if retrievals:
+        evidence_lines.append("### Patterns Considered\n")
+        evidence_lines.append("| Node | Pattern | Score | Confidence |")
+        evidence_lines.append("|---|---|---|---|")
+        for r in retrievals:
+            for p in r.get("patterns", []):
+                evidence_lines.append(
+                    f"| `{r['node']}` | `{p['name']}` | {p['score']} | {r['confidence']} |"
+                )
+        evidence_lines.append("")
+
+    # Scripts / commands invoked
+    scripts = state.get("scripts_invoked") or []
+    if scripts:
+        evidence_lines.append("### Scripts / Commands Invoked\n")
+        for s in scripts:
+            evidence_lines.append(f"- `{s}`")
+        evidence_lines.append("")
+
+    # Log links
+    analysis_log_url = state.get("analysis_log_url", "")
+    if analysis_log_url or log_url or release_log_url:
+        evidence_lines.append("### Log Links\n")
+        if analysis_log_url:
+            evidence_lines.append(f"- [Logs analyzed by LLM (fetch_errors query)]({analysis_log_url})")
+        if log_url:
+            evidence_lines.append(f"- [All service logs — alert window]({log_url})")
+        if release_log_url and release_log_url != log_url:
+            evidence_lines.append(f"- [Logs — around release/feature flag event]({release_log_url})")
+        if alert_url:
+            evidence_lines.append(f"- [Alert policy]({alert_url})")
+
+    report = report + "\n".join(evidence_lines)
     return {"report": report}
 
 
