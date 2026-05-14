@@ -37,10 +37,8 @@ from langgraph.types import interrupt
 
 # Imports locais (mesmo package)
 sys.path.insert(0, str(Path(__file__).parent))
-from db import search_skills
-from embeddings import embed
-from reranker import rerank
-from config import LLM_BASE_URL, CHAT_MODEL, TOP_K_RETRIEVE_SKILLS, USE_RERANKER
+from config import LLM_BASE_URL, CHAT_MODEL
+from rag import get_skills_with_confidence, format_skills_for_prompt
 
 # ── LLM ─────────────────────────────────────────────────────────────────────
 # Aponta para o Ollama remoto (ou local) via API OpenAI-compatible
@@ -90,27 +88,11 @@ class IncidentState(TypedDict):
 
 
 # ── Skill retrieval ──────────────────────────────────────────────────────────
+# DEPRECATED: use SKILL_ABSOLUTE_MIN_SCORE from config.py (via rag.py)
 SKILL_MIN_SCORE = 0.70
 SKILL_CANDIDATE_SCORE = 0.45
-
-
-def get_skill(query: str) -> str:
-    """Devolve o body da skill mais relevante ou string vazia."""
-    qvec = embed([query])[0]
-    raw = search_skills(qvec, TOP_K_RETRIEVE_SKILLS)
-    if not raw:
-        return ""
-    if USE_RERANKER:
-        texts = [f"{r[0]}\n{r[1]}\n{r[2][:1000]}" for r in raw]
-        ranked = rerank(query, texts, top_k=1)
-        if ranked:
-            idx, score = ranked[0]
-            if score >= SKILL_MIN_SCORE:
-                return f"[skill: {raw[idx][0]}]\n\n{raw[idx][2]}"
-    else:
-        if raw[0][3] >= SKILL_MIN_SCORE:
-            return f"[skill: {raw[0][0]}]\n\n{raw[0][2]}"
-    return ""
+# get_skill() has moved to rag.py as a backward-compat shim.
+# Use get_skills_with_confidence() + format_skills_for_prompt() for new code.
 
 
 def call_llm(system: str, user: str) -> str:
@@ -290,13 +272,14 @@ def fetch_errors(state: IncidentState) -> dict:
     }
     resource_filter = resource_label_map.get(rtype, f'resource.labels.service_name="{service}"')
 
-    # get_skill dinâmico baseado no tipo de recurso
+    # skill retrieval dinâmico baseado no tipo de recurso
     skill_query = {
         "cloud_run_revision":  "gcloud logging read error Cloud Run service",
         "pubsub_subscription": "Pub/Sub subscription backlog undelivered messages",
         "cloudsql_database":   "Cloud SQL error logs slow query",
     }.get(rtype, "gcloud logging read error logs GCP")
-    skill = get_skill(skill_query)
+    skill_result = get_skills_with_confidence(skill_query)
+    skill_context = format_skills_for_prompt(skill_result)
 
     all_logs = _run_gcloud_logging(
         (
@@ -326,9 +309,8 @@ def fetch_errors(state: IncidentState) -> dict:
 
     combined = "\n".join(log_lines[:100])
 
-    system = f"""{skill}
-
-Analyze these Cloud Run logs and identify ALL error patterns.
+    skill_prefix = skill_context + "\n\n" if skill_context else ""
+    system = f"""{skill_prefix}Analyze these Cloud Run logs and identify ALL error patterns.
 Pay special attention to:
 - "FATAL ERROR" / "heap out of memory" / "Allocation failed" → JavaScript OOM (ROOT CAUSE)
 - "LIVENESS probe failed" → instance killed after OOM (SYMPTOM)
@@ -353,7 +335,8 @@ def fetch_metrics(state: IncidentState) -> dict:
         state.get("resource_type", ""),
         "GCP metrics throughput monitoring alert"
     )
-    skill = get_skill(skill_query)
+    skill_result = get_skills_with_confidence(skill_query)
+    skill_context = format_skills_for_prompt(skill_result)
 
     alert_dt   = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
     start_time = (alert_dt - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -488,7 +471,8 @@ def fetch_metrics(state: IncidentState) -> dict:
         if not_found else ""
     )
 
-    system = f"""Analyze these GCP {rtype} metrics.
+    skill_prefix = skill_context + "\n\n" if skill_context else ""
+    system = f"""{skill_prefix}Analyze these GCP {rtype} metrics.
 IMPORTANT: The alert fired because the metric is {condition_direction}.{not_found_hint}
 Identify: trend, when it deviated from normal, likely cause.
 Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_cause": true}}]"""
@@ -499,7 +483,8 @@ Return JSON: [{{"metric": "...", "trend": "...", "likely_cause": "...", "root_ca
 
 def check_release(state: IncidentState) -> dict:
     """Verifica se houve release no Cloud Deploy na hora anterior ao alerta."""
-    skill = get_skill("Cloud Deploy release rollout history timestamp")
+    skill_result = get_skills_with_confidence("Cloud Deploy release rollout history timestamp")
+    skill_context = format_skills_for_prompt(skill_result)  # noqa: F841 — used if LLM call added later
 
     alert_dt     = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
     window_start = (alert_dt - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -571,7 +556,8 @@ def fetch_release_logs(state: IncidentState) -> dict:
     if not state.get("release_ts"):
         return {"release_logs": "[]"}
 
-    skill = get_skill("gcloud logging read error logs Cloud Run service")
+    skill_result = get_skills_with_confidence("gcloud logging read error logs Cloud Run service")
+    skill_context = format_skills_for_prompt(skill_result)
 
     rel_dt = datetime.fromisoformat(state["release_ts"].replace("Z", "+00:00"))
     window_start = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -597,9 +583,8 @@ def fetch_release_logs(state: IncidentState) -> dict:
     except (subprocess.TimeoutExpired, FileNotFoundError):
         logs_raw = "[]"
 
-    system = f"""{skill}
-
-Summarise errors that appeared AFTER the release deploy.
+    skill_prefix = skill_context + "\n\n" if skill_context else ""
+    system = f"""{skill_prefix}Summarise errors that appeared AFTER the release deploy.
 Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
 
     summary = call_llm(system, logs_raw[:6000])
@@ -608,7 +593,8 @@ Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
 
 def build_report(state: IncidentState) -> dict:
     """Monta o relatório de incidente com toda a informação recolhida."""
-    skill = get_skill("incident report template SRE post-mortem")
+    skill_result = get_skills_with_confidence("incident report template SRE post-mortem")
+    skill_context = format_skills_for_prompt(skill_result)
 
     project    = state.get("project", "")
     service    = state.get("service", "")
@@ -679,9 +665,8 @@ def build_report(state: IncidentState) -> dict:
         "release_log_url":  release_log_url,
     }, indent=2)
 
-    system = f"""{skill}
-
-Using the incident data below, generate a concise incident report in Markdown.
+    skill_prefix = skill_context + "\n\n" if skill_context else ""
+    system = f"""{skill_prefix}Using the incident data below, generate a concise incident report in Markdown.
 For metric-based/slo-based alerts use metrics_data; for log-based use error_logs.
 If release_type is "optimizely", highlight it as a FEATURE FLAG CHANGE, not a code deploy.
 Use the exact URLs provided in log_url, release_log_url, and alert_url — do NOT use placeholder variables like ${{ALERT_URL}}.
@@ -736,7 +721,8 @@ def decide(state: IncidentState) -> dict:
 
 def fetch_slo(state: IncidentState) -> dict:
     """Para alertas SLO burn rate: consulta compliance e error budget via REST API."""
-    skill = get_skill("SLO burn rate error budget availability latency")
+    skill_result = get_skills_with_confidence("SLO burn rate error budget availability latency")
+    skill_context = format_skills_for_prompt(skill_result)
 
     monitoring_project = state.get("project") or "hw-prod-svc-sre-mon-a1f1"
     service_name       = state.get("service") or "categories-service-api"
@@ -852,9 +838,8 @@ def fetch_slo(state: IncidentState) -> dict:
         "console":     console_url,
     })
 
-    system = f"""{skill}
-
-Analyze this SLO burn rate incident for {service_name}.
+    skill_prefix = skill_context + "\n\n" if skill_context else ""
+    system = f"""{skill_prefix}Analyze this SLO burn rate incident for {service_name}.
 Burn rate > 10x at 1h window = error budget exhausts in ~3 days.
 Use error_logs to identify the underlying cause (errors, latency spikes).
 Include the console URL in the report.

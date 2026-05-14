@@ -73,3 +73,27 @@ TOP_K_SKILLS = 1
 # Gemma 3 4B com contexto 8K ~= 6000 tokens ~= 20000 chars.
 # Reservamos ~8000 chars pro system prompt base + resposta + histórico.
 MAX_CONTEXT_CHARS = 12000
+
+# ── Multi-skill retrieval (Refactor A) ──────────────────────────────────────
+# DEPRECATED: use SKILL_ABSOLUTE_MIN_SCORE
+# SKILL_MIN_SCORE = 0.70  # kept for backward compat — defined in incident_graph.py
+
+# Number of candidates fetched from pgvector before reranking/filtering.
+SKILL_RETRIEVE_CANDIDATES = int(os.getenv("SKILL_RETRIEVE_CANDIDATES", "20"))
+
+# Maximum number of skills to return from get_skills_with_confidence().
+SKILL_MAX_RETURN = int(os.getenv("SKILL_MAX_RETURN", "3"))
+
+# Absolute minimum score — results below this are discarded regardless.
+SKILL_ABSOLUTE_MIN_SCORE = float(os.getenv("SKILL_ABSOLUTE_MIN_SCORE", "0.30"))
+
+# Relative score cutoff: keep skills scoring >= top_score * SKILL_RELATIVE_KEEP.
+SKILL_RELATIVE_KEEP = float(os.getenv("SKILL_RELATIVE_KEEP", "0.85"))
+
+# Gap thresholds used to classify retrieval confidence.
+# gap = top_score - second_score
+# gap >= HIGH  → "high"   (single skill, very clear winner)
+# gap >= MEDIUM → "medium" (up to 2 skills, some ambiguity)
+# gap < MEDIUM  → "low"   (up to SKILL_MAX_RETURN skills, unclear)
+SKILL_HIGH_CONFIDENCE_GAP = float(os.getenv("SKILL_HIGH_CONFIDENCE_GAP", "0.15"))
+SKILL_MEDIUM_CONFIDENCE_GAP = float(os.getenv("SKILL_MEDIUM_CONFIDENCE_GAP", "0.05"))
