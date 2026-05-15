@@ -83,8 +83,11 @@ class IncidentState(TypedDict):
 
     # Investigation traceability
     skill_retrievals: list   # [{node, patterns:[{name,score}], confidence}] per node
-    scripts_invoked: list    # ["gcloud run revisions list", "optimizely logs", ...]
-    analysis_log_url: str    # exact GCP Logging URL used to fetch logs for LLM
+    scripts_invoked: list    # tool calls made by the LLM
+    analysis_log_url: str    # GCP Logging URL for the main log query
+
+    # Tool-calling investigation result (replaces error_logs + metrics_data in new flow)
+    investigation_result: str
 
     # Output
     report: str
@@ -196,7 +199,19 @@ def parse_alert(state: IncidentState) -> dict:
             or inc.get("policy_display_name")
             or inc.get("condition", {}).get("displayName", "")
         ),
-        "alert_url":      inc.get("url") or inc.get("alert_url", ""),
+        "alert_url":           inc.get("url") or inc.get("alert_url", ""),
+        # Initialise investigation fields
+        "error_logs":          "",
+        "metrics_data":        "",
+        "release_found":       False,
+        "release_id":          "",
+        "release_ts":          "",
+        "release_type":        "",
+        "release_logs":        "",
+        "investigation_result": "",
+        "skill_retrievals":    [],
+        "scripts_invoked":     [],
+        "analysis_log_url":    "",
     }
 
 
@@ -662,6 +677,124 @@ Return JSON: [{{"count": N, "message": "...", "first_seen": "ISO8601"}}]"""
     }
 
 
+def investigate(state: IncidentState) -> dict:
+    """Tool-calling investigation loop — LLM decides which commands to run."""
+    from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+    from tools import INVESTIGATION_TOOLS, TOOLS_BY_NAME
+
+    rtype = state.get("resource_type", "cloud_run_revision")
+    skill_query = {
+        "cloud_run_revision":  "Cloud Run HTTP 500 errors OOM liveness probe health check noise",
+        "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
+        "cloudsql_database":   "Cloud SQL slow query lock contention missing index",
+        "slo-based":           "SLO burn rate error budget availability latency",
+    }.get(rtype, "GCP service incident investigation root cause")
+    skill_result = get_skills_with_confidence(skill_query)
+    skill_context = format_skills_for_prompt(skill_result)
+
+    alert_dt     = datetime.fromisoformat(state["alert_ts"].replace("Z", "+00:00"))
+    window_start = (alert_dt - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    window_end   = (alert_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    project      = state["project"]
+    service      = state["service"]
+
+    import urllib.parse as _up
+    default_filter = (
+        f'resource.type="{rtype}"'
+        f' AND resource.labels.service_name="{service}"'
+        f' AND timestamp>="{window_start}"'
+        f' AND timestamp<="{window_end}"'
+    )
+    analysis_log_url = (
+        f"https://console.cloud.google.com/logs/query"
+        f";query={_up.quote(default_filter)}?project={project}"
+    )
+
+    context = json.dumps({
+        "service":       service,
+        "project":       project,
+        "resource_type": rtype,
+        "alert_type":    state.get("alert_type"),
+        "condition":     state.get("condition_name"),
+        "alert_ts":      state["alert_ts"],
+        "window_start":  window_start,
+        "window_end":    window_end,
+        "region":        state.get("region", "europe-west1"),
+    }, indent=2)
+
+    skill_prefix = skill_context + "\n\n" if skill_context else ""
+    system = (
+        f"{skill_prefix}"
+        "You are an SRE investigating a GCP production incident. "
+        "Use the available tools to gather evidence before concluding.\n\n"
+        "INVESTIGATION STEPS:\n"
+        "1. fetch_logs — get application/request logs for the alert window\n"
+        "2. list_revisions — check for recent Cloud Run deployments\n"
+        "3. check_optimizely — check for recent feature flag changes\n"
+        "4. For Pub/Sub alerts: describe_subscription to check if it exists\n"
+        "5. For SLO alerts: list_slos to get burn rates\n\n"
+        "After gathering evidence, write a structured investigation summary:\n"
+        "- Errors found (with timestamps and counts)\n"
+        "- Releases or feature flag changes detected\n"
+        "- Root cause hypothesis (or 'No concrete evidence found')\n"
+        "- Recommended action: rollback | escalate | monitor | close\n\n"
+        "RULES: Do NOT invent data. If a tool returns nothing, say so explicitly."
+    )
+
+    llm_with_tools = llm.bind_tools(INVESTIGATION_TOOLS)
+    messages = [
+        SystemMessage(content=system),
+        HumanMessage(content=context),
+    ]
+
+    scripts_used: list[str] = []
+    max_iterations = 8
+    final_content  = ""
+
+    for _ in range(max_iterations):
+        response = llm_with_tools.invoke(messages)
+        messages.append(response)
+        final_content = getattr(response, "content", "") or ""
+
+        if not response.tool_calls:
+            break
+
+        for tc in response.tool_calls:
+            tool_name = tc["name"]
+            tool_args = tc.get("args", {})
+            args_repr = ", ".join(f"{k}={str(v)[:40]}" for k, v in tool_args.items())
+            print(f"  [tool_call] {tool_name}({args_repr})")
+            scripts_used.append(f"{tool_name}({args_repr})")
+
+            tool = TOOLS_BY_NAME.get(tool_name)
+            result = tool.invoke(tool_args) if tool else f"Unknown tool: {tool_name}"
+            messages.append(ToolMessage(
+                content=str(result)[:4000],
+                tool_call_id=tc["id"],
+            ))
+
+    retrievals = [{
+        "node": "investigate",
+        "confidence": skill_result.confidence,
+        "patterns": [{"name": s.name, "score": round(s.score, 3)} for s in skill_result.skills],
+    }]
+
+    return {
+        "investigation_result": final_content,
+        "skill_retrievals":     retrievals,
+        "scripts_invoked":      scripts_used,
+        "analysis_log_url":     analysis_log_url,
+        # Keep fields for build_report compatibility
+        "error_logs":    "",
+        "metrics_data":  "",
+        "release_found": False,
+        "release_id":    "",
+        "release_ts":    "",
+        "release_type":  "",
+        "release_logs":  "",
+    }
+
+
 def build_report(state: IncidentState) -> dict:
     """Monta o relatório de incidente com toda a informação recolhida."""
     skill_result = get_skills_with_confidence("GCP incident report template SRE post-mortem root cause")
@@ -718,31 +851,26 @@ def build_report(state: IncidentState) -> dict:
         release_log_url = log_url
 
     # URLs are injected deterministically in the evidence section — keep them OUT of LLM context
+    investigation = state.get("investigation_result", "")
     context = json.dumps({
-        "incident_id":   state.get("incident_id"),
-        "service":       service,
-        "project":       project,
-        "alert_ts":      alert_ts,
-        "condition":     state.get("condition_name"),
-        "alert_type":    alert_type,
-        "error_logs":    state.get("error_logs"),
-        "metrics_data":  state.get("metrics_data"),
-        "release_found": state.get("release_found"),
-        "release_type":  state.get("release_type"),
-        "release_id":    state.get("release_id"),
-        "release_ts":    release_ts,
-        "release_logs":  state.get("release_logs"),
+        "incident_id":          state.get("incident_id"),
+        "service":              service,
+        "project":              project,
+        "alert_ts":             alert_ts,
+        "condition":            state.get("condition_name"),
+        "alert_type":           alert_type,
+        "investigation_result": investigation,
     }, indent=2)
 
     skill_prefix = skill_context + "\n\n" if skill_context else ""
-    system = f"""{skill_prefix}Using the incident data below, generate a concise incident report in Markdown.
+    system = f"""{skill_prefix}Using the investigation result below, generate a concise incident report in Markdown.
 RULES:
-- For metric-based/slo-based alerts use metrics_data; for log-based use error_logs.
-- If release_type is "optimizely", label it FEATURE FLAG CHANGE (not a code deploy).
-- If release_found is false, write "No release identified in the 2h window."
+- Base the report ONLY on evidence in investigation_result. Do not invent data.
+- If investigation_result mentions an Optimizely event, label it FEATURE FLAG CHANGE (not a code deploy).
+- If no release was found, write "No release identified in the investigation window."
 - DO NOT generate any URLs, links, or placeholders — log links are added separately.
-- DO NOT speculate about root causes not supported by the provided error_logs or metrics_data.
-  If no errors or metrics data, write "No concrete evidence found — manual investigation required."
+- DO NOT speculate about root causes not present in investigation_result.
+  If no concrete errors found, write "No concrete evidence found — manual investigation required."
 - Sections: ## Impact, ## Timeline, ## Error/Metric Pattern, ## Release Correlation, ## Recommended Action.
 - End with: RECOMMENDED ACTION: rollback | escalate | monitor | close"""
 
@@ -961,47 +1089,23 @@ Return JSON: [{{"slo": "...", "goal": "...", "likely_cause": "...", "root_cause"
     return {"metrics_data": summary, "error_logs": "\n".join(log_lines[:10])}
 
 
-def route_alert_type(state: IncidentState) -> str:
-    atype = state.get("alert_type", "log-based")
-    if atype == "slo-based":
-        return "fetch_slo"
-    if atype == "metric-based":
-        return "fetch_metrics"
-    return "fetch_errors"
-
-
-def route_release(state: IncidentState) -> str:
-    return "fetch_release_logs" if state.get("release_found") else "build_report"
-
-
 # ── Graph ────────────────────────────────────────────────────────────────────
 
 def build_graph():
     g = StateGraph(IncidentState)
 
-    g.add_node("parse_alert",        parse_alert)
-    g.add_node("fetch_errors",       fetch_errors)       # log-based alerts
-    g.add_node("fetch_metrics",      fetch_metrics)      # metric-based alerts
-    g.add_node("fetch_slo",          fetch_slo)          # SLO burn rate alerts
-    g.add_node("check_release",      check_release)
-    g.add_node("fetch_release_logs", fetch_release_logs)
-    g.add_node("build_report",       build_report)
-    g.add_node("notify_and_wait",    notify_and_wait)
-    g.add_node("decide",             decide)
+    g.add_node("parse_alert",     parse_alert)
+    g.add_node("investigate",     investigate)   # tool-calling loop
+    g.add_node("build_report",    build_report)
+    g.add_node("notify_and_wait", notify_and_wait)
+    g.add_node("decide",          decide)
 
     g.set_entry_point("parse_alert")
-
-    # Branch: log-based → fetch_errors | metric-based → fetch_metrics
-    g.add_conditional_edges("parse_alert", route_alert_type)
-
-    g.add_edge("fetch_errors",       "check_release")
-    g.add_edge("fetch_metrics",      "check_release")
-    g.add_edge("fetch_slo",          "check_release")
-    g.add_conditional_edges("check_release", route_release)
-    g.add_edge("fetch_release_logs", "build_report")
-    g.add_edge("build_report",       "notify_and_wait")
-    g.add_edge("notify_and_wait",    "decide")
-    g.add_edge("decide",             END)
+    g.add_edge("parse_alert",     "investigate")
+    g.add_edge("investigate",     "build_report")
+    g.add_edge("build_report",    "notify_and_wait")
+    g.add_edge("notify_and_wait", "decide")
+    g.add_edge("decide",          END)
 
     return g.compile(checkpointer=MemorySaver())
 
