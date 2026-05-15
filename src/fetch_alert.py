@@ -23,13 +23,14 @@ if n >= len(policies):
 
 policy = policies[n]
 cond = policy.get("conditions", [{}])[0]
-cond_threshold = cond.get("conditionThreshold", {})
-metric_filter = cond_threshold.get("filter", "")
+# Suporta conditionThreshold (metric-based) e conditionMatchedLog (log-based)
+cond_threshold  = cond.get("conditionThreshold", {})
+cond_log        = cond.get("conditionMatchedLog", {})
+metric_filter   = cond_threshold.get("filter", "") or cond_log.get("filter", "")
 
-# Inferir resource type e service name do filter
 resource_type = "cloud_run_revision"
-service_name = "unknown"
-region = "europe-west1"
+service_name  = "unknown"
+region        = "europe-west1"
 
 for token_part in metric_filter.replace('"', ' ').split():
     if token_part in ("cloud_run_revision", "pubsub_subscription", "k8s_container", "gce_instance"):
@@ -39,6 +40,14 @@ for part in metric_filter.split('"'):
     if part and not part.startswith(" ") and "_service" in part:
         service_name = part
         break
+
+# Fallback: extrair service do display name "[Cloudrun] payment-service-api response code"
+if service_name == "unknown":
+    import re
+    display = policy.get("displayName", "")
+    m = re.search(r'\]\s*([\w-]+(?:-api|-service|-worker|-job)?)', display)
+    if m:
+        service_name = m.group(1)
 
 alert = {
     "incident": {

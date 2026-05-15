@@ -717,32 +717,34 @@ def build_report(state: IncidentState) -> dict:
     else:
         release_log_url = log_url
 
+    # URLs are injected deterministically in the evidence section — keep them OUT of LLM context
     context = json.dumps({
-        "incident_id":      state.get("incident_id"),
-        "service":          service,
-        "project":          project,
-        "alert_ts":         alert_ts,
-        "condition":        state.get("condition_name"),
-        "alert_type":       alert_type,
-        "error_logs":       state.get("error_logs"),
-        "metrics_data":     state.get("metrics_data"),
-        "release_found":    state.get("release_found"),
-        "release_type":     state.get("release_type"),
-        "release_id":       state.get("release_id"),
-        "release_ts":       release_ts,
-        "release_logs":     state.get("release_logs"),
-        "alert_url":        alert_url or f"https://console.cloud.google.com/monitoring?project={project}",
-        "log_url":          log_url,
-        "release_log_url":  release_log_url,
+        "incident_id":   state.get("incident_id"),
+        "service":       service,
+        "project":       project,
+        "alert_ts":      alert_ts,
+        "condition":     state.get("condition_name"),
+        "alert_type":    alert_type,
+        "error_logs":    state.get("error_logs"),
+        "metrics_data":  state.get("metrics_data"),
+        "release_found": state.get("release_found"),
+        "release_type":  state.get("release_type"),
+        "release_id":    state.get("release_id"),
+        "release_ts":    release_ts,
+        "release_logs":  state.get("release_logs"),
     }, indent=2)
 
     skill_prefix = skill_context + "\n\n" if skill_context else ""
     system = f"""{skill_prefix}Using the incident data below, generate a concise incident report in Markdown.
-For metric-based/slo-based alerts use metrics_data; for log-based use error_logs.
-If release_type is "optimizely", highlight it as a FEATURE FLAG CHANGE, not a code deploy.
-Use the exact URLs provided in log_url, release_log_url, and alert_url — do NOT use placeholder variables like ${{ALERT_URL}}.
-Include: Impact, Timeline, Error/Metric Pattern, Release Correlation, Recommended Action.
-End with a RECOMMENDED ACTION: one of rollback / escalate / monitor / close"""
+RULES:
+- For metric-based/slo-based alerts use metrics_data; for log-based use error_logs.
+- If release_type is "optimizely", label it FEATURE FLAG CHANGE (not a code deploy).
+- If release_found is false, write "No release identified in the 2h window."
+- DO NOT generate any URLs, links, or placeholders — log links are added separately.
+- DO NOT speculate about root causes not supported by the provided error_logs or metrics_data.
+  If no errors or metrics data, write "No concrete evidence found — manual investigation required."
+- Sections: ## Impact, ## Timeline, ## Error/Metric Pattern, ## Release Correlation, ## Recommended Action.
+- End with: RECOMMENDED ACTION: rollback | escalate | monitor | close"""
 
     report = call_llm(system, context[:5000])
 
