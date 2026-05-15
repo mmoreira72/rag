@@ -748,6 +748,7 @@ def investigate(state: IncidentState) -> dict:
     ]
 
     scripts_used: list[str] = []
+    called_tool_keys: set[str] = set()   # dedup: (name, sorted_args_json)
     max_iterations = 8
     final_content  = ""
 
@@ -762,7 +763,18 @@ def investigate(state: IncidentState) -> dict:
         for tc in response.tool_calls:
             tool_name = tc["name"]
             tool_args = tc.get("args", {})
+            tool_key  = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
             args_repr = ", ".join(f"{k}={str(v)[:40]}" for k, v in tool_args.items())
+
+            if tool_key in called_tool_keys:
+                print(f"  [tool_call] SKIP duplicate: {tool_name}({args_repr})")
+                messages.append(ToolMessage(
+                    content="Duplicate call — same result as previous invocation. Do not call again.",
+                    tool_call_id=tc["id"],
+                ))
+                continue
+
+            called_tool_keys.add(tool_key)
             print(f"  [tool_call] {tool_name}({args_repr})")
             scripts_used.append(f"{tool_name}({args_repr})")
 
