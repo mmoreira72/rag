@@ -722,68 +722,83 @@ def investigate(state: IncidentState) -> dict:
         "region":        state.get("region", "europe-west1"),
     }, indent=2)
 
+    # Select only tools relevant to the alert type — reduces context size
+    alert_type = state.get("alert_type", "log-based")
+    if rtype == "pubsub_subscription":
+        active_tool_names = {"fetch_logs", "describe_subscription", "check_optimizely", "fetch_timeseries"}
+    elif alert_type == "slo-based":
+        active_tool_names = {"fetch_logs", "list_slos", "list_revisions", "check_optimizely"}
+    else:
+        active_tool_names = {"fetch_logs", "list_revisions", "check_optimizely"}
+    active_tools = [t for t in INVESTIGATION_TOOLS if t.name in active_tool_names]
+
     skill_prefix = skill_context + "\n\n" if skill_context else ""
     system = (
         f"{skill_prefix}"
         "You are an SRE investigating a GCP production incident. "
-        "Use the available tools to gather evidence before concluding.\n\n"
-        "INVESTIGATION STEPS:\n"
-        "1. fetch_logs — get application/request logs for the alert window\n"
-        "2. list_revisions — check for recent Cloud Run deployments\n"
-        "3. check_optimizely — check for recent feature flag changes\n"
-        "4. For Pub/Sub alerts: describe_subscription to check if it exists\n"
-        "5. For SLO alerts: list_slos to get burn rates\n\n"
-        "After gathering evidence, write a structured investigation summary:\n"
-        "- Errors found (with timestamps and counts)\n"
-        "- Releases or feature flag changes detected\n"
-        "- Root cause hypothesis (or 'No concrete evidence found')\n"
-        "- Recommended action: rollback | escalate | monitor | close\n\n"
-        "RULES: Do NOT invent data. If a tool returns nothing, say so explicitly."
+        "Use the available tools to gather evidence.\n\n"
+        "Steps: 1) fetch_logs for the alert window  "
+        "2) list_revisions for recent deploys  "
+        "3) check_optimizely for feature flag changes.\n"
+        "After gathering evidence, write a concise investigation summary:\n"
+        "errors found | releases detected | root cause | recommended action.\n"
+        "Do NOT invent data. If a tool returns nothing, say so."
     )
 
-    llm_with_tools = llm.bind_tools(INVESTIGATION_TOOLS)
+    llm_with_tools = llm.bind_tools(active_tools)
     messages = [
         SystemMessage(content=system),
         HumanMessage(content=context),
     ]
 
     scripts_used: list[str] = []
-    called_tool_keys: set[str] = set()   # dedup: (name, sorted_args_json)
-    max_iterations = 8
+    called_tool_keys: set[str] = set()
+    max_iterations = 6
     final_content  = ""
 
-    for _ in range(max_iterations):
-        response = llm_with_tools.invoke(messages)
-        messages.append(response)
-        final_content = getattr(response, "content", "") or ""
+    try:
+        for _ in range(max_iterations):
+            response = llm_with_tools.invoke(messages)
+            messages.append(response)
+            final_content = getattr(response, "content", "") or ""
 
-        if not response.tool_calls:
-            break
+            if not response.tool_calls:
+                break
 
-        for tc in response.tool_calls:
-            tool_name = tc["name"]
-            tool_args = tc.get("args", {})
-            tool_key  = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
-            args_repr = ", ".join(f"{k}={str(v)[:40]}" for k, v in tool_args.items())
+            for tc in response.tool_calls:
+                tool_name = tc["name"]
+                tool_args = tc.get("args", {})
+                tool_key  = f"{tool_name}:{json.dumps(tool_args, sort_keys=True)}"
+                args_repr = ", ".join(f"{k}={str(v)[:40]}" for k, v in tool_args.items())
 
-            if tool_key in called_tool_keys:
-                print(f"  [tool_call] SKIP duplicate: {tool_name}({args_repr})")
+                if tool_key in called_tool_keys:
+                    print(f"  [tool_call] SKIP duplicate: {tool_name}({args_repr})")
+                    messages.append(ToolMessage(
+                        content="Duplicate — already called. Do not repeat.",
+                        tool_call_id=tc["id"],
+                    ))
+                    continue
+
+                called_tool_keys.add(tool_key)
+                print(f"  [tool_call] {tool_name}({args_repr})")
+                scripts_used.append(f"{tool_name}({args_repr})")
+
+                tool = TOOLS_BY_NAME.get(tool_name)
+                result = tool.invoke(tool_args) if tool else f"Unknown tool: {tool_name}"
                 messages.append(ToolMessage(
-                    content="Duplicate call — same result as previous invocation. Do not call again.",
+                    content=str(result)[:1500],   # reduced from 4000
                     tool_call_id=tc["id"],
                 ))
-                continue
 
-            called_tool_keys.add(tool_key)
-            print(f"  [tool_call] {tool_name}({args_repr})")
-            scripts_used.append(f"{tool_name}({args_repr})")
-
-            tool = TOOLS_BY_NAME.get(tool_name)
-            result = tool.invoke(tool_args) if tool else f"Unknown tool: {tool_name}"
-            messages.append(ToolMessage(
-                content=str(result)[:4000],
-                tool_call_id=tc["id"],
-            ))
+    except Exception as e:
+        print(f"  [investigate] tool-calling failed: {e} — falling back to no-tool analysis")
+        # Fallback: ask LLM to analyse with just the alert context (no tools)
+        fallback_resp = llm.invoke([
+            SystemMessage(content=skill_prefix + "Analyse this GCP alert and summarise what likely happened. "
+                          "State clearly that automated log retrieval failed."),
+            HumanMessage(content=context),
+        ])
+        final_content = getattr(fallback_resp, "content", str(fallback_resp))
 
     retrievals = [{
         "node": "investigate",
