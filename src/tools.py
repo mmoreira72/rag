@@ -20,6 +20,9 @@ from skills_runtime import (
     fetch_timeseries,
     fetch_k8s_events,
     fetch_istio_logs,
+    fetch_container_logs,
+    fetch_pod_metrics,
+    fetch_dapr_logs,
     list_revisions,
     list_slos,
 )
@@ -29,64 +32,72 @@ def _j(obj) -> str:
     return json.dumps(obj, indent=2, default=str)
 
 
-# ── Arg schemas ───────────────────────────────────────────────────────────────
+# ── Base schemas ──────────────────────────────────────────────────────────────
+
+class _GCPArgs(BaseModel):
+    project: str = Field(description="GCP project ID")
+
+
+class _K8sArgs(BaseModel):
+    """Base for all GKE workload tools — shares service, project, hours, namespace."""
+    service:   str = Field(description="GKE workload name (pod_name prefix)")
+    project:   str = Field(default="hw-prod-sre-mgmt-k8s-fc7f", description="GKE project ID")
+    hours:     int = Field(default=6,                 description="Hours back to search")
+    namespace: str = Field(default="social-platform",  description="Kubernetes namespace")
+
+
+# ── Concrete schemas ───────────────────────────────────────────────────────────
 
 class FetchLogsArgs(BaseModel):
     filter_str: str = Field(
         description=(
             "GCP Cloud Logging filter (gcloud logging read syntax). "
-            "Always include resource.type and timestamp range. "
-            'Example: resource.type="cloud_run_revision" AND '
-            'resource.labels.service_name="payment-service-api" AND '
-            'timestamp>="2026-05-15T10:00:00Z" AND timestamp<="2026-05-15T12:00:00Z"'
+            "Always include a timestamp range. "
+            "resource.type is optional — omit it for K8s workloads to avoid missing logs spread across multiple resource types (k8s_pod, k8s_cluster, k8s_container). "
+            "Cloud Run example: "
+            'resource.type="cloud_run_revision" AND resource.labels.service_name="payment-service-api" AND timestamp>="2026-05-15T10:00:00Z" AND timestamp<="2026-05-15T12:00:00Z" '
+            "K8s example: "
+            'labels.source_workload="og-event-service-event-sync-processor" AND timestamp>="2026-05-15T10:00:00Z" AND timestamp<="2026-05-15T12:00:00Z"'
         )
     )
     project: str = Field(description="GCP project ID where logs live")
-    limit: int = Field(default=150, description="Max entries to return")
+    limit:   int = Field(default=150, description="Max entries to return")
 
 
 class ListRevisionsArgs(BaseModel):
     service: str = Field(description="Cloud Run service name")
     project: str = Field(description="GCP project ID")
-    region: str = Field(default="europe-west1", description="Cloud Run region")
-    limit: int = Field(default=5)
+    region:  str = Field(default="europe-west1", description="Cloud Run region")
+    limit:   int = Field(default=5)
 
 
 class DescribeSubscriptionArgs(BaseModel):
-    project: str = Field(description="GCP project ID")
+    project:      str = Field(description="GCP project ID")
     subscription: str = Field(description="Pub/Sub subscription short name (not full path)")
 
 
 class CheckOptimizelyArgs(BaseModel):
-    project: str = Field(
-        default="hw-prod-svc-sre-mon-a1f1",
-        description="Monitoring project (Optimizely webhook runs here)",
-    )
-    hours: int = Field(default=2, description="Hours back to search for flag changes")
+    project: str = Field(default="hw-prod-svc-sre-mon-a1f1", description="Monitoring project (Optimizely webhook runs here)")
+    hours:   int = Field(default=2, description="Hours back to search for flag changes")
 
 
-class FetchTimeseriesArgs(BaseModel):
-    project: str = Field(description="GCP project ID")
-    metric: str = Field(description="Metric type, e.g. pubsub.googleapis.com/subscription/num_undelivered_messages")
+class FetchTimeseriesArgs(_GCPArgs):
+    metric:         str = Field(description="Metric type, e.g. pubsub.googleapis.com/subscription/num_undelivered_messages")
     window_minutes: int = Field(default=90)
 
 
-class ListSlosArgs(BaseModel):
-    project: str = Field(description="GCP monitoring project ID")
+class ListSlosArgs(_GCPArgs):
     service: str = Field(description="Service name for SLO lookup")
 
 
-class FetchK8sEventsArgs(BaseModel):
-    service: str = Field(description="GKE workload name (e.g. og-event-service-event-sync-processor)")
-    project: str = Field(default="hw-prod-sre-mgmt-k8s-fc7f", description="GKE project ID")
-    hours: int = Field(default=6, description="Hours back to search")
-    namespace: str = Field(default="social-platform", description="Kubernetes namespace")
+# K8s schemas — extend _K8sArgs, add only fields that differ
+class FetchK8sEventsArgs(_K8sArgs):  pass
+class FetchIstioLogsArgs(_K8sArgs):  pass
+class FetchPodMetricsArgs(_K8sArgs): pass
+class FetchDaprLogsArgs(_K8sArgs):   pass
 
-
-class FetchIstioLogsArgs(BaseModel):
-    service: str = Field(description="GKE workload name (source_workload label in Istio logs)")
-    project: str = Field(default="hw-prod-sre-mgmt-k8s-fc7f", description="GKE project ID")
-    hours: int = Field(default=6, description="Hours back to search")
+class FetchContainerLogsArgs(_K8sArgs):
+    severity_filter: str = Field(default="ERROR", description="Minimum severity: ERROR, WARNING, or DEFAULT")
 
 
 # ── Tool functions ────────────────────────────────────────────────────────────
@@ -163,6 +174,42 @@ def _fetch_istio_logs(service: str, project: str = "hw-prod-sre-mgmt-k8s-fc7f",
     return _j(summary)
 
 
+def _fetch_container_logs(service: str, project: str = "hw-prod-sre-mgmt-k8s-fc7f",
+                          hours: int = 6, namespace: str = "social-platform",
+                          severity_filter: str = "ERROR") -> str:
+    results = fetch_container_logs(service, project, hours, namespace, severity_filter)
+    if not results:
+        return "No container logs found — try severity_filter=WARNING or DEFAULT."
+    errors = [e for e in results if e.get("is_error")]
+    return _j({"total": len(results), "errors": len(errors), "entries": results[:30]})
+
+
+def _fetch_pod_metrics(service: str, project: str = "hw-prod-sre-mgmt-k8s-fc7f",
+                       hours: int = 6, namespace: str = "social-platform") -> str:
+    result = fetch_pod_metrics(service, project, project, hours, namespace)
+    if "error" in result:
+        return f"Metrics unavailable: {result['error']}"
+    mem = result.get("memory_mb", [])
+    cpu = result.get("cpu_percent", [])
+    if not mem and not cpu:
+        return "No metrics found — pod may not exist or metrics not yet available."
+    # Summarise trend: last value, max value
+    def _summary(pts: list[dict], unit: str) -> dict:
+        if not pts:
+            return {}
+        vals = [p["value"] for p in pts]
+        return {"last": vals[-1], "max": max(vals), "unit": unit, "points": len(pts)}
+    return _j({"memory": _summary(mem, "MB"), "cpu": _summary(cpu, "%"), "raw": result})
+
+
+def _fetch_dapr_logs(service: str, project: str = "hw-prod-sre-mgmt-k8s-fc7f",
+                     hours: int = 6, namespace: str = "social-platform") -> str:
+    results = fetch_dapr_logs(service, project, hours, namespace)
+    if not results:
+        return "No Dapr sidecar errors found — Dapr may be healthy or not present."
+    return _j({"dapr_errors": len(results), "entries": results[:20]})
+
+
 # ── Public tool list ──────────────────────────────────────────────────────────
 
 INVESTIGATION_TOOLS = [
@@ -237,6 +284,34 @@ INVESTIGATION_TOOLS = [
             "Use for GKE workloads with Istio service mesh."
         ),
         args_schema=FetchIstioLogsArgs,
+    ),
+    StructuredTool.from_function(
+        func=_fetch_container_logs,
+        name="fetch_container_logs",
+        description=(
+            "Fetch application container logs from a GKE pod — what the service itself writes. "
+            "Use to find application errors, stack traces, and messages before a crash. "
+            "Default severity=ERROR; use WARNING or DEFAULT for more context."
+        ),
+        args_schema=FetchContainerLogsArgs,
+    ),
+    StructuredTool.from_function(
+        func=_fetch_pod_metrics,
+        name="fetch_pod_metrics",
+        description=(
+            "Fetch CPU and memory usage metrics for a GKE pod via Cloud Monitoring. "
+            "Use to detect memory leak (growing memory_mb) or CPU saturation before OOMKill."
+        ),
+        args_schema=FetchPodMetricsArgs,
+    ),
+    StructuredTool.from_function(
+        func=_fetch_dapr_logs,
+        name="fetch_dapr_logs",
+        description=(
+            "Fetch Dapr sidecar (daprd) error logs for a GKE workload — state store failures, "
+            "pub/sub errors, gRPC connection issues. Use when the workload uses Dapr."
+        ),
+        args_schema=FetchDaprLogsArgs,
     ),
 ]
 

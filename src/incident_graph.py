@@ -1,23 +1,24 @@
 """
-Incident Response Graph — LangGraph skeleton.
+Incident Response Graph — LangGraph.
 
 Workflow:
   parse_alert
       ↓
-  fetch_errors          (gcloud logging read ±30min)
+  investigate   ← tool-calling loop (LLM drives evidence collection)
+      │             1. check_optimizely  — flag changes first (context for log search)
+      │             2. fetch_logs / fetch_k8s_events / fetch_istio_logs  — evidence
+      │             3. list_revisions / fetch_timeseries / list_slos  — as needed
       ↓
-  check_release         (Cloud Deploy / Artifact Registry)
-      ├─ yes ──▶ fetch_release_logs ──▶ build_report
-      └─ no  ──────────────────────────▶ build_report
-                                              ↓
-                                     notify_and_wait   ← interrupt() aguarda engenheiro
-                                              ↓
-                                           decide       (rollback / escalate / close)
+  build_report  ← structured markdown + deterministic evidence section
+      ↓
+  notify_and_wait  ← interrupt() aguarda engenheiro
+      ↓
+  decide           ← rollback / escalate / monitor / close
 
 Uso:
     python src/incident_graph.py --alert alert.json
 
-Dependências adicionais (adicionar a requirements.txt):
+Dependências:
     langgraph>=0.2
     langchain-openai>=0.1
 """
@@ -58,6 +59,11 @@ logging.basicConfig(
     ],
 )
 log = logging.getLogger("incident_graph")
+
+# Silencia loggers verbosos de bibliotecas externas
+for _noisy in ("httpx", "httpcore", "sentence_transformers", "huggingface_hub"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 log.info("[startup] log → %s", _log_path)
 
 # ── LLM ─────────────────────────────────────────────────────────────────────
@@ -82,7 +88,6 @@ class IncidentState(TypedDict):
     resource_type: str      # cloud_run_revision | pubsub_subscription | etc.
     metric_type: str        # pubsub.googleapis.com/... | run.googleapis.com/...
     condition_type: str     # COMPARISON_GT | COMPARISON_LT
-    alert_type: str         # "log-based" | "metric-based"
     region: str
     alert_ts: str           # ISO 8601
     condition_name: str
@@ -186,23 +191,8 @@ def parse_alert(state: IncidentState) -> dict:
     metric_type    = inc.get("metric", {}).get("type", "")
     condition_type = inc.get("condition_type", "COMPARISON_GT")
 
-    # Classificação do tipo de alerta
-    LOG_BASED_RESOURCES = {"cloud_run_revision", "gae_app", "gce_instance",
-                           "cloudsql_database", "k8s_container"}
-    is_slo = (
-        "select_slo_burn_rate" in metric_type
-        or "slo" in (inc.get("policy_display_name", "") or "").lower()
-        or bool(inc.get("slo_resources"))
-    )
-    if is_slo:
-        alert_type = "slo-based"
-    elif resource_type in LOG_BASED_RESOURCES and condition_type != "COMPARISON_LT":
-        alert_type = "log-based"
-    else:
-        alert_type = "metric-based"
-
-    log.info("[parse_alert] resource=%s condition=%s → alert_type=%s project=%s",
-             resource_type, condition_type, alert_type, project)
+    log.info("[parse_alert] resource=%s condition=%s project=%s",
+             resource_type, condition_type, project)
 
     return {
         "incident_id":    inc.get("incident_id") or inc.get("name", "unknown"),
@@ -211,7 +201,6 @@ def parse_alert(state: IncidentState) -> dict:
         "resource_type":  resource_type,
         "metric_type":    metric_type,
         "condition_type": condition_type,
-        "alert_type":     alert_type,
         "region":         labels.get("location") or labels.get("region") or "europe-west1",
         "alert_ts":       alert_ts,
         "condition_name": (
@@ -317,14 +306,11 @@ def fetch_errors(state: IncidentState) -> dict:
     }
     resource_filter = resource_label_map.get(rtype, f'resource.labels.service_name="{service}"')
 
-    # skill retrieval dinâmico baseado no tipo de recurso
-    skill_query = {
-        "cloud_run_revision":  "Cloud Run service HTTP errors OOM liveness probe health check noise",
-        "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
-        "cloudsql_database":   "Cloud SQL slow query lock contention missing index replication",
-        "k8s_container":       "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
-        "k8s_pod":             "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
-    }.get(rtype, "GCP service incident investigation root cause")
+    skill_query = " ".join(filter(None, [
+        state.get("condition_name", ""),
+        service,
+        rtype,
+    ]))
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
 
@@ -713,14 +699,13 @@ def investigate(state: IncidentState) -> dict:
     from tools import INVESTIGATION_TOOLS, TOOLS_BY_NAME
 
     rtype = state.get("resource_type", "cloud_run_revision")
-    skill_query = {
-        "cloud_run_revision":  "Cloud Run HTTP 500 errors OOM liveness probe health check noise",
-        "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
-        "cloudsql_database":   "Cloud SQL slow query lock contention missing index",
-        "slo-based":           "SLO burn rate error budget availability latency",
-        "k8s_container":       "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
-        "k8s_pod":             "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
-    }.get(rtype, "GCP service incident investigation root cause")
+    # Build skill query from actual alert data so RAG finds the most relevant pattern
+    # for any of the 400+ alert types — not a hardcoded mapping
+    skill_query = " ".join(filter(None, [
+        state.get("condition_name", ""),
+        state.get("service", ""),
+        rtype,
+    ]))
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
 
@@ -751,39 +736,51 @@ def investigate(state: IncidentState) -> dict:
         f";query={_up.quote(default_filter)}?project={_log_project}"
     )
 
+    _is_k8s_inv = rtype in ("k8s_container", "k8s_pod")
     context = json.dumps({
         "service":       service,
         "project":       project,
         "resource_type": rtype,
-        "alert_type":    state.get("alert_type"),
         "condition":     state.get("condition_name"),
         "alert_ts":      state["alert_ts"],
         "window_start":  window_start,
         "window_end":    window_end,
         "region":        state.get("region", "europe-west1"),
+        **({"k8s_project": "hw-prod-sre-mgmt-k8s-fc7f",
+            "k8s_namespace": "social-platform"} if _is_k8s_inv else {}),
     }, indent=2)
 
-    # Select only tools relevant to the alert type — reduces context size
-    alert_type = state.get("alert_type", "log-based")
-    if rtype == "pubsub_subscription":
-        active_tool_names = {"fetch_logs", "describe_subscription", "check_optimizely", "fetch_timeseries"}
-    elif alert_type == "slo-based":
-        active_tool_names = {"fetch_logs", "list_slos", "list_revisions", "check_optimizely"}
+    # Tool selection by resource_type
+    _K8S_RTYPES = ("k8s_container", "k8s_pod")
+    if rtype in _K8S_RTYPES:
+        active_tool_names = {
+            "fetch_logs", "check_optimizely",
+            "fetch_k8s_events", "fetch_istio_logs",
+            "fetch_container_logs", "fetch_pod_metrics", "fetch_dapr_logs",
+        }
+    elif rtype == "pubsub_subscription":
+        active_tool_names = {"fetch_logs", "check_optimizely", "describe_subscription", "fetch_timeseries", "list_slos"}
     else:
-        active_tool_names = {"fetch_logs", "list_revisions", "check_optimizely"}
+        # cloud_run_revision, cloudsql_database, gce_instance, slo-based — always include list_slos
+        active_tool_names = {"fetch_logs", "check_optimizely", "list_revisions", "list_slos"}
     active_tools = [t for t in INVESTIGATION_TOOLS if t.name in active_tool_names]
 
     skill_prefix = skill_context + "\n\n" if skill_context else ""
+    _k8s_project_note = (
+        "For ALL K8s tools: always use project=hw-prod-sre-mgmt-k8s-fc7f "
+        "and namespace=social-platform — never use the monitoring project or namespace=default.\n"
+    ) if rtype in _K8S_RTYPES else ""
+
     system = (
         f"{skill_prefix}"
-        "You are an SRE investigating a GCP production incident. "
-        "Use the available tools to gather evidence.\n\n"
-        "Steps: 1) fetch_logs for the alert window  "
-        "2) list_revisions for recent deploys  "
-        "3) check_optimizely for feature flag changes.\n"
-        "After gathering evidence, write a concise investigation summary:\n"
-        "errors found | releases detected | root cause | recommended action.\n"
-        "Do NOT invent data. If a tool returns nothing, say so."
+        "You are an SRE investigating a GCP production incident.\n\n"
+        "Investigation order:\n"
+        "1) check_optimizely FIRST — flag changes give context for all other queries.\n"
+        "2) Fetch evidence using the available tools (logs, events, metrics, SLOs).\n"
+        "3) Correlate timestamps — root cause precedes symptoms.\n\n"
+        f"{_k8s_project_note}"
+        "Write a concise summary: errors found | changes detected | root cause | action.\n"
+        "Do NOT invent data. If a tool returns nothing, say so explicitly."
     )
 
     llm_with_tools = llm.bind_tools(active_tools)
@@ -872,8 +869,6 @@ def build_report(state: IncidentState) -> dict:
     service    = state.get("service", "")
     alert_ts   = state.get("alert_ts", "")
     alert_url  = state.get("alert_url", "")
-    alert_type = state.get("alert_type", "log-based")
-
     # Gera URLs reais para os links do relatório
     try:
         alert_dt   = datetime.fromisoformat(alert_ts.replace("Z", "+00:00"))
@@ -882,7 +877,11 @@ def build_report(state: IncidentState) -> dict:
     except Exception:
         ts_start = ts_end = ""
 
-    if alert_type == "slo-based":
+    _is_slo = (
+        "slo" in state.get("condition_name", "").lower()
+        or "slo" in state.get("metric_type", "").lower()
+    )
+    if _is_slo:
         log_url = (
             f"https://console.cloud.google.com/monitoring/services"
             f"/{service}?project={project}"
@@ -940,7 +939,6 @@ def build_report(state: IncidentState) -> dict:
         "project":              project,
         "alert_ts":             alert_ts,
         "condition":            state.get("condition_name"),
-        "alert_type":           alert_type,
         "investigation_result": investigation,
     }, indent=2)
 
@@ -1001,8 +999,19 @@ RULES:
 
 def notify_and_wait(state: IncidentState) -> dict:
     """Envia notificação ao engenheiro e aguarda resposta (LangGraph interrupt)."""
-    # Envia para Slack/PagerDuty — substituir pelo webhook real
     log.info("\n" + "="*60 + "\nINCIDENT REPORT\n" + "="*60 + "\n%s\n" + "="*60, state["report"])
+
+    # Salva o report em markdown
+    ts       = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    inc_id   = state.get("incident_id", "unknown").replace("/", "-")
+    service  = state.get("service", "service").replace("/", "-")
+    md_path  = f"/tmp/incident-{service}-{inc_id}-{ts}.md"
+    try:
+        Path(md_path).write_text(state["report"], encoding="utf-8")
+        log.info("[report] saved → %s", md_path)
+        print(f"\n📄 Report saved: {md_path}")
+    except Exception as e:
+        log.warning("[report] failed to save: %s", e)
 
     # TODO: substituir por chamada real ao Slack/PagerDuty
     # import httpx
