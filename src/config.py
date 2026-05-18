@@ -14,10 +14,10 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
 
 # Chat model — use o identifier exato do servidor:
-# LM Studio: nome que aparece em "My Models" (ex: "google/gemma-3-4b")
-# Ollama:    formato "qwen2.5:14b", "gemma3:4b", "llama3.2:3b", etc.
-# Produção (servidor GPU): qwen2.5:14b
-CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-3-4b")
+# LM Studio: nome que aparece em "My Models" (ex: "google/gemma-4-e4b")
+# Ollama:    formato "qwen3:14b", "gemma4:e4b", "llama3.2:3b", etc.
+# Produção (servidor GPU): qwen3:14b
+CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-4-e4b")
 
 # Modelos a pré-carregar na VRAM no startup (comma-separated).
 # Exemplo: WARMUP_MODELS=qwen2.5:14b,devstral:latest
@@ -70,7 +70,7 @@ TOP_K_DOCS = 3
 TOP_K_SKILLS = 1
 
 # Limite máximo de caracteres do contexto injetado no system prompt.
-# Gemma 3 4B com contexto 8K ~= 6000 tokens ~= 20000 chars.
+# Gemma 4 E4B com contexto 8K ~= 6000 tokens ~= 20000 chars.
 # Reservamos ~8000 chars pro system prompt base + resposta + histórico.
 MAX_CONTEXT_CHARS = 12000
 

@@ -18,6 +18,8 @@ from skills_runtime import (
     describe_subscription,
     fetch_logs,
     fetch_timeseries,
+    fetch_k8s_events,
+    fetch_istio_logs,
     list_revisions,
     list_slos,
 )
@@ -74,6 +76,19 @@ class ListSlosArgs(BaseModel):
     service: str = Field(description="Service name for SLO lookup")
 
 
+class FetchK8sEventsArgs(BaseModel):
+    service: str = Field(description="GKE workload name (e.g. og-event-service-event-sync-processor)")
+    project: str = Field(default="hw-prod-sre-mgmt-k8s-fc7f", description="GKE project ID")
+    hours: int = Field(default=6, description="Hours back to search")
+    namespace: str = Field(default="social-platform", description="Kubernetes namespace")
+
+
+class FetchIstioLogsArgs(BaseModel):
+    service: str = Field(description="GKE workload name (source_workload label in Istio logs)")
+    project: str = Field(default="hw-prod-sre-mgmt-k8s-fc7f", description="GKE project ID")
+    hours: int = Field(default=6, description="Hours back to search")
+
+
 # ── Tool functions ────────────────────────────────────────────────────────────
 
 def _fetch_logs(filter_str: str, project: str, limit: int = 150) -> str:
@@ -126,6 +141,26 @@ def _list_slos(project: str, service: str) -> str:
     if not results:
         return "No SLOs found for this service."
     return _j(results)
+
+
+def _fetch_k8s_events(service: str, project: str = "hw-prod-sre-mgmt-k8s-fc7f",
+                      hours: int = 6, namespace: str = "social-platform") -> str:
+    results = fetch_k8s_events(service, project, hours, namespace)
+    if not results:
+        return "No Kubernetes events found for this workload."
+    root_causes = [e for e in results if e.get("root_cause")]
+    summary = {"total": len(results), "root_cause_events": root_causes, "all_events": results}
+    return _j(summary)
+
+
+def _fetch_istio_logs(service: str, project: str = "hw-prod-sre-mgmt-k8s-fc7f",
+                      hours: int = 6) -> str:
+    results = fetch_istio_logs(service, project, hours)
+    if not results:
+        return "No Istio access logs found for this workload."
+    failures = [e for e in results if e.get("is_failure")]
+    summary = {"total": len(results), "failures": len(failures), "failure_entries": failures[:10]}
+    return _j(summary)
 
 
 # ── Public tool list ──────────────────────────────────────────────────────────
@@ -182,6 +217,26 @@ INVESTIGATION_TOOLS = [
             "Use for SLO burn rate alerts."
         ),
         args_schema=ListSlosArgs,
+    ),
+    StructuredTool.from_function(
+        func=_fetch_k8s_events,
+        name="fetch_k8s_events",
+        description=(
+            "Fetch Kubernetes lifecycle events for a GKE workload — OOMKill, CrashLoopBackOff, "
+            "Evicted, BackOff, NEG syncer shutdown. Use for GKE/k8s_container alerts. "
+            "Returns root_cause=true on critical events (OOMKill, CrashLoop)."
+        ),
+        args_schema=FetchK8sEventsArgs,
+    ),
+    StructuredTool.from_function(
+        func=_fetch_istio_logs,
+        name="fetch_istio_logs",
+        description=(
+            "Fetch Istio sidecar access logs for a GKE workload — PassthroughCluster failures, "
+            "UF/URX response flags indicating upstream connection failures. "
+            "Use for GKE workloads with Istio service mesh."
+        ),
+        args_schema=FetchIstioLogsArgs,
     ),
 ]
 

@@ -29,7 +29,8 @@ services:
         condition: service_healthy
     environment:
       LLM_BASE_URL: http://ollama:11434/v1
-      WARMUP_MODELS: ${WARMUP_MODELS:-qwen2.5:14b,devstral:latest}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3:14b}
+      WARMUP_MODELS: ${WARMUP_MODELS:-qwen3:14b,devstral:latest}
 
   worker:
     depends_on:
@@ -37,4 +38,5 @@ services:
         condition: service_healthy
     environment:
       LLM_BASE_URL: http://ollama:11434/v1
-      WARMUP_MODELS: ${WARMUP_MODELS:-qwen2.5:14b,devstral:latest}
+      CHAT_MODEL: ${CHAT_MODEL:-qwen3:14b}
+      WARMUP_MODELS: ${WARMUP_MODELS:-qwen3:14b,devstral:latest}

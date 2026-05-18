@@ -43,7 +43,7 @@ services:
       PG_DSN: postgresql://rag:rag@db:5432/rag
       REDIS_URL: redis://redis:6379
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
-      CHAT_MODEL: ${CHAT_MODEL:-google/gemma-3-4b}
+      CHAT_MODEL: ${CHAT_MODEL:-google/gemma-4-e4b}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:
@@ -65,7 +65,7 @@ services:
       PG_DSN: postgresql://rag:rag@db:5432/rag
       REDIS_URL: redis://redis:6379
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
-      CHAT_MODEL: ${CHAT_MODEL:-google/gemma-3-4b}
+      CHAT_MODEL: ${CHAT_MODEL:-google/gemma-4-e4b}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:

@@ -15,6 +15,9 @@ o cliente MCP que conecta nele é quem dispara as chamadas.
 """
 from __future__ import annotations
 
+import sys
+from datetime import datetime, timezone
+
 from mcp.server.fastmcp import FastMCP
 
 from db import search_skills, search_documents
@@ -40,6 +43,15 @@ SKILL_CANDIDATE_COS = 0.55
 DOC_MIN_SCORE_COS   = 0.40
 
 mcp = FastMCP("local-rag")
+
+
+def _log(tool: str, query: str, outcome: str, details: str = "") -> None:
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    short = query[:70].replace("\n", " ")
+    line = f"[{ts}] {tool} query={short!r} → {outcome}"
+    if details:
+        line += f"  ({details})"
+    print(line, file=sys.stderr, flush=True)
 
 
 @mcp.tool()
@@ -78,6 +90,8 @@ def search_skills_tool(query: str, k: int = 3) -> str:
     MAX_BODY_CHARS = 4000  # evita encher o contexto do Cline com skills gigantes
 
     if confident:
+        names_scores = ", ".join(f"{n}({s:.2f})" for n, _, _, s in confident)
+        _log("search_skills", query, "confident", names_scores)
         parts = []
         for name, description, body, score in confident:
             if len(body) > MAX_BODY_CHARS:
@@ -89,6 +103,8 @@ def search_skills_tool(query: str, k: int = 3) -> str:
         return "\n\n---\n\n".join(parts)
 
     if candidates:
+        names_scores = ", ".join(f"{n}({s:.2f})" for n, _, s in candidates)
+        _log("search_skills", query, "candidates", names_scores)
         lines = [
             "Confiança insuficiente para seleccionar a skill automaticamente.",
             "Encontrei estas candidatas — qual delas é a mais relevante para a tua pergunta?\n",
@@ -100,6 +116,7 @@ def search_skills_tool(query: str, k: int = 3) -> str:
         )
         return "\n".join(lines)
 
+    _log("search_skills", query, "none")
     return (
         "Nenhuma skill relevante encontrada para esta query. "
         "Não invente um procedimento — pergunta ao utilizador se quer criar uma skill para este caso."
@@ -134,8 +151,11 @@ def search_documents_tool(query: str, k: int = 5) -> str:
         rows = [r for r in raw[:k] if r[3] >= DOC_MIN_SCORE_COS]
 
     if not rows:
+        _log("search_docs", query, "none")
         return "Nenhum trecho relevante encontrado nas notas/código indexados."
 
+    srcs = ", ".join(f"{src}#{idx}({s:.2f})" for src, idx, _, s in rows)
+    _log("search_docs", query, "found", srcs)
     parts = []
     for source, chunk_index, content, score in rows:
         parts.append(

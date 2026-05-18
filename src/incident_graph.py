@@ -24,6 +24,8 @@ Dependências adicionais (adicionar a requirements.txt):
 from __future__ import annotations
 
 import json
+import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone, timedelta
@@ -39,6 +41,24 @@ from langgraph.types import interrupt
 sys.path.insert(0, str(Path(__file__).parent))
 from config import LLM_BASE_URL, CHAT_MODEL
 from rag import get_skills_with_confidence, format_skills_for_prompt
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+# LOG_FILE env var sobrescreve o default. Ex: LOG_FILE=/var/log/incident.log
+_log_path = os.getenv(
+    "INCIDENT_LOG_FILE",
+    f"/tmp/incident-graph-{datetime.now(timezone.utc).strftime('%Y%m%d')}.log",
+)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(_log_path, encoding="utf-8"),
+    ],
+)
+log = logging.getLogger("incident_graph")
+log.info("[startup] log → %s", _log_path)
 
 # ── LLM ─────────────────────────────────────────────────────────────────────
 # Aponta para o Ollama remoto (ou local) via API OpenAI-compatible
@@ -181,8 +201,8 @@ def parse_alert(state: IncidentState) -> dict:
     else:
         alert_type = "metric-based"
 
-    print(f"  [parse_alert] resource={resource_type} condition={condition_type} "
-          f"→ alert_type={alert_type} project={project}")
+    log.info("[parse_alert] resource=%s condition=%s → alert_type=%s project=%s",
+             resource_type, condition_type, alert_type, project)
 
     return {
         "incident_id":    inc.get("incident_id") or inc.get("name", "unknown"),
@@ -249,7 +269,7 @@ def _resolve_project(monitoring_project: str, metric_type: str,
         if series:
             pid = series[0].get("resource", {}).get("labels", {}).get("project_id", "")
             if pid:
-                print(f"  [resolve_project] found via REST: {pid}")
+                log.info("[resolve_project] found via REST: %s", pid)
                 return pid
     except Exception:
         pass
@@ -267,10 +287,11 @@ def _run_gcloud_logging(filter_str: str, project: str, limit: int = 100, label: 
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         results = json.loads(out.stdout or "[]")
-        print(f"  [logging:{label or 'query'}] {len(results)} entries | stderr: {out.stderr[:120] if out.stderr else 'none'}")
+        log.info("[logging:%s] %d entries | stderr: %s",
+                 label or "query", len(results), out.stderr[:120] if out.stderr else "none")
         return results
     except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"  [logging:{label or 'query'}] ERROR: {e}")
+        log.warning("[logging:%s] ERROR: %s", label or "query", e)
         return []
 
 
@@ -284,11 +305,15 @@ def fetch_errors(state: IncidentState) -> dict:
     rtype         = state.get("resource_type") or "cloud_run_revision"
 
     # Constrói o resource label correcto conforme o tipo de recurso
+    # K8s: usa regex no pod_name (pod muda a cada restart) + fallback em textPayload
+    _is_k8s = rtype in ("k8s_container", "k8s_pod")
     resource_label_map = {
         "cloud_run_revision":   f'resource.labels.service_name="{service}"',
         "pubsub_subscription":  f'resource.labels.subscription_id="{service}"',
         "cloudsql_database":    f'resource.labels.database_id="{service}"',
         "gce_instance":         f'resource.labels.instance_id="{service}"',
+        "k8s_container":        f'resource.labels.pod_name=~"{service}.*"',
+        "k8s_pod":              f'labels.source_workload="{service}"',
     }
     resource_filter = resource_label_map.get(rtype, f'resource.labels.service_name="{service}"')
 
@@ -297,9 +322,14 @@ def fetch_errors(state: IncidentState) -> dict:
         "cloud_run_revision":  "Cloud Run service HTTP errors OOM liveness probe health check noise",
         "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
         "cloudsql_database":   "Cloud SQL slow query lock contention missing index replication",
+        "k8s_container":       "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
+        "k8s_pod":             "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
     }.get(rtype, "GCP service incident investigation root cause")
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
+
+    # Para K8s: usa o projecto GKE, não o projecto de monitoring
+    log_project = "hw-prod-sre-mgmt-k8s-fc7f" if _is_k8s else project
 
     log_filter = (
         f'resource.type="{rtype}"'
@@ -310,10 +340,10 @@ def fetch_errors(state: IncidentState) -> dict:
     import urllib.parse as _up
     analysis_log_url = (
         f"https://console.cloud.google.com/logs/query"
-        f";query={_up.quote(log_filter)}?project={project}"
+        f";query={_up.quote(log_filter)}?project={log_project}"
     )
 
-    all_logs = _run_gcloud_logging(log_filter, project, limit=150, label=f"6h:{rtype}")
+    all_logs = _run_gcloud_logging(log_filter, log_project, limit=150, label=f"6h:{rtype}")
 
     # Extrai texto de cada entrada para o LLM (textPayload ou jsonPayload.message)
     log_lines = []
@@ -417,14 +447,14 @@ def fetch_metrics(state: IncidentState) -> dict:
             ts_json = json.loads(resp.read())
 
         ts_data = ts_json.get("timeSeries", [])
-        print(f"  [metrics:timeseries] {len(ts_data)} series via REST")
+        log.info("[metrics:timeseries] %d series via REST", len(ts_data))
 
         # Extrai project_id do primeiro resultado se ainda não resolvido
         if ts_data and (not project or project == monitoring_project):
             resolved = ts_data[0].get("resource", {}).get("labels", {}).get("project_id", "")
             if resolved:
                 project = resolved
-                print(f"  [resolve_project] resolved from timeseries: {project}")
+                log.info("[resolve_project] resolved from timeseries: %s", project)
 
         results["timeseries"] = [
             {
@@ -439,7 +469,7 @@ def fetch_metrics(state: IncidentState) -> dict:
             for s in ts_data[:3]
         ]
     except Exception as e:
-        print(f"  [metrics:timeseries] ERROR: {e}")
+        log.warning("[metrics:timeseries] ERROR: %s", e)
         results["timeseries"] = []
 
     # 2. Descreve o recurso (Pub/Sub subscription, etc.)
@@ -453,15 +483,15 @@ def fetch_metrics(state: IncidentState) -> dict:
             out = subprocess.run(desc_cmd, capture_output=True, text=True, timeout=20)
             if out.returncode == 0:
                 results["resource_describe"] = json.loads(out.stdout or "{}")
-                print(f"  [metrics:describe] OK project={project}")
+                log.info("[metrics:describe] OK project=%s", project)
             else:
                 # NOT_FOUND é diagnóstico — pode significar subscription deletada
                 err = out.stderr.strip()
                 results["resource_describe"] = {"error": err}
                 results["subscription_not_found"] = "NOT_FOUND" in err
-                print(f"  [metrics:describe] {err[:120]}")
+                log.warning("[metrics:describe] %s", err[:120])
         except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"  [metrics:describe] ERROR: {e}")
+            log.warning("[metrics:describe] ERROR: %s", e)
             results["resource_describe"] = {}
 
     # Pré-sumariza para não encher o contexto do LLM
@@ -607,7 +637,7 @@ def check_release(state: IncidentState) -> dict:
         event   = payload.get("event", first.get("labels", {}).get("event", ""))
         rev     = payload.get("revision", "")
         ts      = first.get("timestamp", "")
-        print(f"  [check_release] Optimizely event: {event} rev={rev} ts={ts}")
+        log.info("[check_release] Optimizely event: %s rev=%s ts=%s", event, rev, ts)
         return {
             "release_found": True,
             "release_id":    f"optimizely-rev-{rev} ({event})",
@@ -688,6 +718,8 @@ def investigate(state: IncidentState) -> dict:
         "pubsub_subscription": "Pub/Sub subscription backlog growing dropping NOT_FOUND",
         "cloudsql_database":   "Cloud SQL slow query lock contention missing index",
         "slo-based":           "SLO burn rate error budget availability latency",
+        "k8s_container":       "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
+        "k8s_pod":             "GKE Kubernetes pod OOMKill CrashLoop Istio PassthroughCluster NEG syncer Dapr restart",
     }.get(rtype, "GCP service incident investigation root cause")
     skill_result = get_skills_with_confidence(skill_query)
     skill_context = format_skills_for_prompt(skill_result)
@@ -699,15 +731,24 @@ def investigate(state: IncidentState) -> dict:
     service      = state["service"]
 
     import urllib.parse as _up
-    default_filter = (
-        f'resource.type="{rtype}"'
-        f' AND resource.labels.service_name="{service}"'
-        f' AND timestamp>="{window_start}"'
-        f' AND timestamp<="{window_end}"'
-    )
+    _is_k8s = rtype in ("k8s_container", "k8s_pod")
+    _log_project = "hw-prod-sre-mgmt-k8s-fc7f" if _is_k8s else project
+    if _is_k8s:
+        default_filter = (
+            f'labels.source_workload="{service}"'
+            f' AND timestamp>="{window_start}"'
+            f' AND timestamp<="{window_end}"'
+        )
+    else:
+        default_filter = (
+            f'resource.type="{rtype}"'
+            f' AND resource.labels.service_name="{service}"'
+            f' AND timestamp>="{window_start}"'
+            f' AND timestamp<="{window_end}"'
+        )
     analysis_log_url = (
         f"https://console.cloud.google.com/logs/query"
-        f";query={_up.quote(default_filter)}?project={project}"
+        f";query={_up.quote(default_filter)}?project={_log_project}"
     )
 
     context = json.dumps({
@@ -772,7 +813,7 @@ def investigate(state: IncidentState) -> dict:
                 args_repr = ", ".join(f"{k}={str(v)[:40]}" for k, v in tool_args.items())
 
                 if tool_key in called_tool_keys:
-                    print(f"  [tool_call] SKIP duplicate: {tool_name}({args_repr})")
+                    log.info("[tool_call] SKIP duplicate: %s(%s)", tool_name, args_repr)
                     messages.append(ToolMessage(
                         content="Duplicate — already called. Do not repeat.",
                         tool_call_id=tc["id"],
@@ -780,7 +821,7 @@ def investigate(state: IncidentState) -> dict:
                     continue
 
                 called_tool_keys.add(tool_key)
-                print(f"  [tool_call] {tool_name}({args_repr})")
+                log.info("[tool_call] %s(%s)", tool_name, args_repr)
                 scripts_used.append(f"{tool_name}({args_repr})")
 
                 tool = TOOLS_BY_NAME.get(tool_name)
@@ -791,7 +832,7 @@ def investigate(state: IncidentState) -> dict:
                 ))
 
     except Exception as e:
-        print(f"  [investigate] tool-calling failed: {e} — falling back to no-tool analysis")
+        log.warning("[investigate] tool-calling failed: %s — falling back to no-tool analysis", e)
         # Fallback: ask LLM to analyse with just the alert context (no tools)
         fallback_resp = llm.invoke([
             SystemMessage(content=skill_prefix + "Analyse this GCP alert and summarise what likely happened. "
@@ -848,13 +889,22 @@ def build_report(state: IncidentState) -> dict:
         )
     else:
         import urllib.parse
-        log_filter = urllib.parse.quote(
-            f'resource.labels.service_name="{service}"'
-            f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
-        )
+        _is_k8s_br = state.get("resource_type", "") in ("k8s_container", "k8s_pod")
+        _br_project = "hw-prod-sre-mgmt-k8s-fc7f" if _is_k8s_br else project
+        if _is_k8s_br:
+            _raw_filter = (
+                f'labels.source_workload="{service}"'
+                f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
+            )
+        else:
+            _raw_filter = (
+                f'resource.labels.service_name="{service}"'
+                f' AND timestamp>="{ts_start}" AND timestamp<="{ts_end}"'
+            )
+        log_filter = urllib.parse.quote(_raw_filter)
         log_url = (
             f"https://console.cloud.google.com/logs/query"
-            f";query={log_filter}?project={project}"
+            f";query={log_filter}?project={_br_project}"
         )
 
     release_ts  = state.get("release_ts", "")
@@ -864,8 +914,13 @@ def build_report(state: IncidentState) -> dict:
             rel_start  = (rel_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
             rel_end    = (rel_dt + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
             import urllib.parse as _up
+            _is_k8s_rel = state.get("resource_type", "") in ("k8s_container", "k8s_pod")
+            _rel_svc_filter = (
+                f'labels.source_workload="{service}"' if _is_k8s_rel
+                else f'resource.labels.service_name="{service}"'
+            )
             rel_filter = _up.quote(
-                f'resource.labels.service_name="{service}"'
+                f'{_rel_svc_filter}'
                 f' AND timestamp>="{rel_start}" AND timestamp<="{rel_end}"'
             )
             release_log_url = (
@@ -947,11 +1002,7 @@ RULES:
 def notify_and_wait(state: IncidentState) -> dict:
     """Envia notificação ao engenheiro e aguarda resposta (LangGraph interrupt)."""
     # Envia para Slack/PagerDuty — substituir pelo webhook real
-    print("\n" + "="*60)
-    print("INCIDENT REPORT")
-    print("="*60)
-    print(state["report"])
-    print("="*60)
+    log.info("\n" + "="*60 + "\nINCIDENT REPORT\n" + "="*60 + "\n%s\n" + "="*60, state["report"])
 
     # TODO: substituir por chamada real ao Slack/PagerDuty
     # import httpx
@@ -977,7 +1028,7 @@ def decide(state: IncidentState) -> dict:
     else:
         decision = "monitor"
 
-    print(f"\n→ Decision: {decision}")
+    log.info("→ Decision: %s", decision)
 
     # TODO: executar a acção (chamar terragrunt, gcloud deploy rollback, etc.)
 
@@ -995,7 +1046,7 @@ def fetch_slo(state: IncidentState) -> dict:
     service_name       = state.get("service") or "categories-service-api"
     alert_ts           = state.get("alert_ts", "")
 
-    print(f"  [slo] querying SLOs for service={service_name} project={monitoring_project}")
+    log.info("[slo] querying SLOs for service=%s project=%s", service_name, monitoring_project)
 
     try:
         token = subprocess.run(
@@ -1010,7 +1061,7 @@ def fetch_slo(state: IncidentState) -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:
             slos_data = json.loads(resp.read())
         slos = slos_data.get("serviceLevelObjectives", [])
-        print(f"  [slo] found {len(slos)} SLOs")
+        log.info("[slo] found %d SLOs", len(slos))
 
         slo_summary = []
         for slo in slos[:3]:
@@ -1048,9 +1099,9 @@ def fetch_slo(state: IncidentState) -> dict:
                     pts = ts_list[0].get("pointData", [])
                     if pts:
                         burn_rate = pts[0].get("values", [{}])[0].get("doubleValue")
-                print(f"  [slo] {slo_id}: burn_rate={burn_rate}")
+                log.info("[slo] %s: burn_rate=%s", slo_id, burn_rate)
             except Exception as e:
-                print(f"  [slo] {slo_id}: burn_rate query failed: {e}")
+                log.warning("[slo] %s: burn_rate query failed: %s", slo_id, e)
 
             slo_summary.append({
                 "slo_id":    slo_id,
@@ -1061,7 +1112,7 @@ def fetch_slo(state: IncidentState) -> dict:
             })
 
     except Exception as e:
-        print(f"  [slo] ERROR: {e}")
+        log.warning("[slo] ERROR: %s", e)
         slo_summary = []
 
     # Tenta buscar logs de erro do serviço (via project do monitoring — cross-project)
