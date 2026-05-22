@@ -90,6 +90,7 @@ SKILLS_PUBLICAS = {
     "primeiro-acesso-cadastro",
     "saudacoes",
     "opçoes-resgate",
+    "nao-sei-icare",
 }
 
 # Documento exclusivo para usuários não autenticados

@@ -32,10 +32,12 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
         # Grafo pausado em interrupt — participante está respondendo a um campo
         result = _graph.invoke(Command(resume=message), config)
     else:
-        # Query augmentation apenas para retrieval — mensagem_participante fica original
-        # para o LLM responder a pergunta certa, não a anterior.
+        # Query augmentation apenas para retrieval — mensagem_participante fica original.
+        # Não augmenta se a mensagem actual for muito similar à anterior (evita query duplicada).
+        import difflib
         last_msg = state.values.get("mensagem_participante", "") if state.values else ""
-        rag_query = f"{last_msg} {message}".strip() if last_msg else message
+        similarity = difflib.SequenceMatcher(None, last_msg.lower(), message.lower()).ratio()
+        rag_query = f"{last_msg} {message}".strip() if last_msg and similarity < 0.7 else message
 
         initial: SeligaState = {
             "numero_atendimento":    session_id,
