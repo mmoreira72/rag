@@ -91,6 +91,7 @@ SKILLS_PUBLICAS = {
     "saudacoes",
     "opçoes-resgate",
     "nao-sei-icare",
+    "falar-com-atendente",
 }
 
 # Documento exclusivo para usuários não autenticados
