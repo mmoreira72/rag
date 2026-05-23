@@ -8,16 +8,18 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # URL do servidor de chat (API compatível com OpenAI).
-# LM Studio (Mac, padrão):  http://localhost:1234/v1
-# Ollama nativo:             http://localhost:11434/v1
-# Ollama container (server): http://ollama:11434/v1  (sobrescrito pelo docker-compose.server.yml)
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:1234/v1")
+# Padrão: Ollama remoto no servidor GPU (2.59.171.212:11434).
+# Alternativas (via env var):
+#   LM Studio (Mac local):     http://localhost:1234/v1
+#   Ollama local:              http://localhost:11434/v1
+#   Ollama container (server): http://ollama:11434/v1  (docker-compose.server.yml)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://2.59.171.212:11434/v1")
 
 # Chat model — use o identifier exato do servidor:
-# LM Studio: nome que aparece em "My Models" (ex: "google/gemma-4-e4b")
 # Ollama:    formato "qwen3:14b", "gemma4:e4b", "llama3.2:3b", etc.
-# Produção (servidor GPU): qwen3:14b
-CHAT_MODEL = os.getenv("CHAT_MODEL", "google/gemma-4-e4b")
+# LM Studio: nome que aparece em "My Models" (ex: "google/gemma-4-e4b")
+# Padrão alinhado com o servidor GPU: qwen3:14b (32k ctx).
+CHAT_MODEL = os.getenv("CHAT_MODEL", "qwen3:14b")
 
 # Modelos a pré-carregar na VRAM no startup (comma-separated).
 # Exemplo: WARMUP_MODELS=qwen2.5:14b,devstral:latest
