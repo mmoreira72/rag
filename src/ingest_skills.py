@@ -34,9 +34,11 @@ def parse_skill(md_text: str):
                         campos_obrigatorios = v
                     elif k == "resolucao":
                         resolucao = v
-    # Injeta metadados no topo do body para que o grafo os leia em runtime
+    # Injeta metadados no topo do body para que o grafo os leia em runtime.
+    # campos_obrigatorios=None  → chave ausente → fallback conservador no grafo ("icare")
+    # campos_obrigatorios=""    → chave presente mas vazia → escalação direta sem coletar dados
     prefix = ""
-    if campos_obrigatorios:
+    if campos_obrigatorios is not None:
         prefix += f"CAMPOS_OBRIGATORIOS: {campos_obrigatorios}\n"
     if resolucao:
         prefix += f"RESOLUCAO: {resolucao}\n"

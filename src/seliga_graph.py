@@ -65,7 +65,11 @@ MENSAGEM_ENCAMINHAMENTO = (
 
 
 def _campos_da_skill(skill_body: str) -> list[str]:
-    """Lê campos_obrigatorios injetados pelo ingest_skills no topo do body."""
+    """Lê campos_obrigatorios injetados pelo ingest_skills no topo do body.
+
+    Retorna [] quando a linha existe mas está vazia (skill escala sem coletar dados).
+    Retorna ["icare"] como fallback conservador quando a linha não existe.
+    """
     for line in skill_body.splitlines():
         if line.startswith("CAMPOS_OBRIGATORIOS:"):
             raw = line.split(":", 1)[1].strip()
