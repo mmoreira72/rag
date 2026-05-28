@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "seliga": "./src/seliga_graph.py:build_graph"
+  },
+  "env": ".env"
+}

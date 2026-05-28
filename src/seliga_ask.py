@@ -10,6 +10,7 @@ Lógica por turno:
 """
 from __future__ import annotations
 
+import os
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import Command
@@ -23,11 +24,25 @@ _checkpointer = PostgresSaver(psycopg.connect(PG_DSN, autocommit=True))
 _checkpointer.setup()  # cria tabelas de checkpoint se não existirem
 _graph = build_graph(_checkpointer)
 
+# Langfuse callback — activo apenas se LANGFUSE_HOST estiver definido no ambiente.
+_langfuse_handler = None
+if os.getenv("LANGFUSE_HOST"):
+    try:
+        from langfuse.callback import CallbackHandler
+        _langfuse_handler = CallbackHandler(
+            host=os.environ["LANGFUSE_HOST"],
+            public_key=os.getenv("LANGFUSE_PUBLIC_KEY", ""),
+            secret_key=os.getenv("LANGFUSE_SECRET_KEY", ""),
+        )
+    except ImportError:
+        pass
+
 
 def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
-    config = {"configurable": {"thread_id": session_id}}
+    callbacks = [_langfuse_handler] if _langfuse_handler else []
+    config = {"configurable": {"thread_id": session_id}, "callbacks": callbacks}
 
-    state = _graph.get_state(config)
+    state = _graph.get_state({"configurable": {"thread_id": session_id}})
     if state.next:
         # Grafo pausado em interrupt — participante está respondendo a um campo
         result = _graph.invoke(Command(resume=message), config)
