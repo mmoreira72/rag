@@ -198,12 +198,13 @@ def identificar_skill(state: SeligaState) -> dict:
 def coletar_dados(state: SeligaState) -> dict:
     """Usa o LLM para extrair os dados necessários da conversa."""
     campos = _campos_da_skill(state["skill_body"])
+    campos_desc = {c: LABEL_CAMPO.get(c, c) for c in campos}
     prompt_sys = (
         "Você é um extrator de informações. Analise a mensagem do participante "
-        "e extraia os campos listados em JSON. Use null para campos não informados."
+        "e extraia os campos listados em JSON. Use null apenas se a informação claramente não foi fornecida."
     )
     prompt_usr = (
-        f"Campos a extrair: {campos}\n\n"
+        f"Campos a extrair: {json.dumps(campos_desc, ensure_ascii=False)}\n\n"
         f"Mensagem: {state['mensagem_participante']}\n\n"
         "Responda APENAS com JSON válido, sem markdown."
     )
@@ -237,12 +238,15 @@ def solicitar_dados(state: SeligaState) -> dict:
 
     # Tenta extrair os campos da resposta do participante
     campos = state["campos_faltando"]
+    campos_desc = {c: LABEL_CAMPO.get(c, c) for c in campos}
     prompt_sys = (
-        "Extrator de informações. Analise a resposta e extraia os campos em JSON. "
-        "Use null para campos não informados."
+        "Extrator de informações. O atendente pediu dados específicos ao participante. "
+        "Extraia os campos da resposta em JSON. "
+        "Se o participante respondeu com um código ou valor único para um único campo, use-o diretamente. "
+        "Use null apenas se a informação claramente não foi fornecida."
     )
     prompt_usr = (
-        f"Campos a extrair: {campos}\n\nResposta: {resposta}\n\n"
+        f"Campos a extrair: {json.dumps(campos_desc, ensure_ascii=False)}\n\nResposta: {resposta}\n\n"
         "Responda APENAS com JSON válido, sem markdown."
     )
     raw = _call_llm(prompt_sys, prompt_usr)
