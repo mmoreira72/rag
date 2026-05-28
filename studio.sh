@@ -22,25 +22,29 @@ pkill -f "ssh.*11434:localhost:11434" 2>/dev/null || true
 ssh -f -N -L 11434:localhost:11434 "$SERVER"
 echo "    Tunnel aberto."
 
-echo "==> Criando .env para Studio..."
+echo "==> Actualizando .env para Studio..."
+# Preserva chaves Langfuse existentes
+EXISTING_PK=$(grep -s "^LANGFUSE_PUBLIC_KEY=" "$RAG_DIR/.env" | cut -d= -f2-)
+EXISTING_SK=$(grep -s "^LANGFUSE_SECRET_KEY=" "$RAG_DIR/.env" | cut -d= -f2-)
 cat > "$RAG_DIR/.env" << EOF
 LLM_BASE_URL=http://localhost:11434/v1
-CHAT_MODEL=qwen2.5:14b
+CHAT_MODEL=qwen3-32k:latest
 PG_DSN=postgresql://rag:rag@localhost:5433/rag
 REDIS_URL=redis://localhost:6379
 SKILLS_DIR=$SKILLS_DIR
 USE_RERANKER=1
 LANGFUSE_HOST=http://localhost:3000
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
+LANGFUSE_PUBLIC_KEY=${EXISTING_PK}
+LANGFUSE_SECRET_KEY=${EXISTING_SK}
 EOF
 
-echo ""
-echo "  !! Acede a http://localhost:3000 e cria uma conta (local)."
-echo "     Depois vai a Settings > API Keys e copia as chaves para:"
-echo "     $RAG_DIR/.env  →  LANGFUSE_PUBLIC_KEY e LANGFUSE_SECRET_KEY"
-echo ""
-read -r -p "  Pressiona Enter quando as chaves estiverem no .env..."
+if [ -z "$EXISTING_PK" ]; then
+  echo ""
+  echo "  !! Acede a http://localhost:3000, cria conta e vai a Settings > API Keys."
+  echo "     Adiciona as chaves ao ficheiro: $RAG_DIR/.env"
+  echo ""
+  read -r -p "  Pressiona Enter quando as chaves estiverem no .env..."
+fi
 
 echo "==> Verificando venv..."
 if [ ! -d "$VENV" ]; then

@@ -111,7 +111,7 @@ Skills são pastas com `SKILL.md` (frontmatter YAML + corpo markdown). O ingesto
 | Var | Padrão | Descrição |
 |---|---|---|
 | `LLM_BASE_URL` | `http://localhost:1234/v1` | LM Studio local ou `http://ollama:11434/v1` em produção |
-| `CHAT_MODEL` | `google/gemma-3-4b` | Produção: `qwen2.5:14b` |
+| `CHAT_MODEL` | `google/gemma-3-4b` | Produção: `qwen3-32k:latest` |
 | `API_KEY` | — | Obrigatória. Header `X-API-Key` |
 | `REDIS_URL` | `redis://localhost:6379` | |
 | `PG_DSN` | `postgresql://rag:rag@localhost:5433/rag` | |
