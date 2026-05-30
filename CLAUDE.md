@@ -146,3 +146,15 @@ docker exec local-rag-worker grep "texto esperado" /app/src/chat.py
 - **Rebuild necessário após mudança de código Python** — `docker compose restart` não é suficiente; usar `--build`.
 - **Scores ~0.50 são ruído** — se o reranker retornar só scores próximos de 0.50, a pergunta está fora do escopo. Não baixar o threshold abaixo de 0.55.
 - **`make chat` e API podem dar respostas diferentes** — o CLI usa `main()` (sem histórico), a API usa `ask()` (com histórico). Um follow-up contextual que funciona no CLI pode falhar na API se o histórico estiver vazio ou contaminado.
+
+## Nota: grafo de incidentes extraído (incident-agent)
+
+O grafo de investigação de incidentes (`incident_graph.py`, `fetch_alert.py`,
+`list_alerts.py`, `investigate.py`, `tools.py`, `skills_runtime.py`) foi **movido** deste
+repo para `~/Documents/personal/incident-agent` (pasta `graph/`). Este repo agora é só o
+RAG do Se Liga (chatbot + retrieval).
+
+`rag.py` (`get_skills_with_confidence` / `format_skills_for_prompt`) **permanece aqui** —
+é a superfície de retrieval (embeddings + reranker + pgvector). O incident-agent a consome
+via uma porta (`graph/rag.py`), apontando `RAG_SRC=<este_repo>/src` (import-mode) ou via
+serviço/MCP. Não reintroduzir o grafo de incidentes aqui.

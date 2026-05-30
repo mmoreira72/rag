@@ -27,3 +27,5 @@ data/**/.converted/
 
 # OS
 .DS_Store
+pgdata-skills/
+.langgraph_api/

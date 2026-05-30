@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy local-up local-down local-psql local-ingest-skills local-mcp local-reset-db local-alerts local-fetch-alert local-incident local-graph investigate
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy local-up local-down local-psql local-ingest-skills local-mcp local-reset-db
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -31,7 +31,6 @@ help:
 	@echo "  make ingest-user       convert-user + reindex"
 	@echo ""
 	@echo "  make chat           abre o chat CLI"
-	@echo "  make investigate FOLDER=/tmp/x   extrai signals de logs JSON via LLM"
 	@echo "  make fetch-docs     baixa documentação externa (GitHub, MySQL, GCP)"
 	@echo "  make mcp-serve      sobe o servidor MCP (stdio) para clientes externos"
 	@echo "  make debug Q=\"...\"  inspeciona o retrieval para uma query"
@@ -156,29 +155,6 @@ ALERT ?= $(CURDIR)/tests/fixtures/sample_alert_inventory.json
 # Projecto GCP de monitoring (sobrepõe com MON_PROJECT=outro-projeto)
 MON_PROJECT ?= hw-prod-svc-sre-mon-a1f1
 
-local-alerts:
-	@echo "Buscando alert policies em $(MON_PROJECT)..."
-	cd src && MON_PROJECT="$(MON_PROJECT)" $(LOCAL_PY) list_alerts.py
-
-local-fetch-alert:
-	@echo "Investigando policy #$(N) em $(MON_PROJECT)..."
-	cd src && PG_DSN="$(LOCAL_PG)" MON_PROJECT="$(MON_PROJECT)" N="$(N)" $(LOCAL_PY) fetch_alert.py
-
-local-incident:
-	@echo "Running incident graph with alert: $(abspath $(ALERT))"
-	cd src && PG_DSN="$(LOCAL_PG)" $(LOCAL_PY) incident_graph.py --alert "$(abspath $(ALERT))"
-
-local-graph:
-	cd src && PG_DSN="$(LOCAL_PG)" $(LOCAL_PY) incident_graph.py --print-graph
-
-# make investigate FOLDER=/tmp/myfolder
-# Lê *.json/*.jsonl da pasta, extrai signals via LLM, faz match contra os skills
-# do índice local e grava signals-report-*.md na mesma pasta.
-# Usa o pgvector local (localhost:5435) para skill retrieval — sobe com `make local-up`
-# e ingere com `make local-ingest-skills`.
-investigate:
-	@test -n "$(FOLDER)" || (echo "Usage: make investigate FOLDER=/path/to/logs" && exit 1)
-	cd src && PG_DSN="$(LOCAL_PG)" SKILLS_DIR="$(SKILLS_DIR)" $(LOCAL_PY) investigate.py "$(FOLDER)"
 
 # ---------- ollama ----------
 # MODEL pode ser sobrescrito: make ollama-pull MODEL=llama3.2:3b
