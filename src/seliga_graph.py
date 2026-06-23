@@ -40,12 +40,17 @@ from reranker import rerank
 
 SKILL_MIN_SCORE = 0.65
 
+# Sampling alinhado às best practices do Gemma 4 (temp=1.0, top_p=0.95, top_k=64).
+# Validado por A/B (temp=1.0 usou melhor o contexto, sem alucinar). top_k não é
+# parâmetro OpenAI-padrão — vai via extra_body para o Ollama.
 llm = ChatOpenAI(
     base_url=LLM_BASE_URL,
     api_key="ollama",
     model=CHAT_MODEL,
-    temperature=0.2,
+    temperature=1.0,
+    top_p=0.95,
     max_tokens=1024,
+    extra_body={"top_k": 64},
 )
 
 def _IDENTIDADE() -> str:

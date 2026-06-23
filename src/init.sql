@@ -51,3 +51,19 @@ CREATE TABLE IF NOT EXISTS escaladas (
 
 CREATE INDEX IF NOT EXISTS escaladas_status_idx      ON escaladas(status) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS escaladas_atendimento_idx ON escaladas(numero_atendimento);
+
+-- Log de TODAS as interações (mesmo sem escalação) para reavaliação semanal do
+-- desempenho do retrieval: perguntas recusadas (grounded=false), novas
+-- formulações por skill e distribuição/tendência ao longo do tempo.
+CREATE TABLE IF NOT EXISTS interacoes (
+    id          BIGSERIAL PRIMARY KEY,
+    session_id  TEXT,
+    query       TEXT        NOT NULL,
+    skill_top1  TEXT,
+    score       REAL,
+    grounded    BOOLEAN     NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS interacoes_created_idx  ON interacoes(created_at);
+CREATE INDEX IF NOT EXISTS interacoes_grounded_idx ON interacoes(grounded);

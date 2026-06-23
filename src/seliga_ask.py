@@ -43,6 +43,7 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
     config = {"configurable": {"thread_id": session_id}, "callbacks": callbacks}
 
     state = _graph.get_state({"configurable": {"thread_id": session_id}})
+    is_new = not state.next  # nova pergunta (não é resposta a um interrupt)
     if state.next:
         # Grafo pausado em interrupt — participante está respondendo a um campo
         result = _graph.invoke(Command(resume=message), config)
@@ -88,4 +89,19 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
         sources = [{"type": "skill", "name": skill_name, "score": skill_score}]
     else:
         sources = (result or {}).get("docs_sources", [])
+
+    # Log da interação (só perguntas novas) para reavaliação semanal do retrieval.
+    # Best-effort: nunca quebra o atendimento.
+    if is_new:
+        try:
+            from db import insert_interacao
+            insert_interacao(
+                session_id, message,
+                skill_name or None,
+                float(skill_score) if skill_name else None,
+                bool(skill_name),
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[seliga_ask] falha ao logar interacao: {e}", flush=True)
+
     return {"answer": answer, "sources": sources}

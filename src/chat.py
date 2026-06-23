@@ -10,7 +10,10 @@ from datetime import date
 from embeddings import embed
 from reranker import rerank
 from llm_client import chat
-from db import search_documents, search_skills, get_session_history, save_session_history
+from db import (
+    search_documents, search_skills, get_session_history, save_session_history,
+    insert_interacao,
+)
 from config import (
     TOP_K_RETRIEVE_DOCS,
     TOP_K_RETRIEVE_SKILLS,
@@ -177,6 +180,20 @@ def _build_messages(question: str, history: list) -> tuple[list, bool]:
     return messages, grounded
 
 
+def _log_interacao(session_id: str, question: str, skills, grounded: bool) -> None:
+    """Loga a interação para a reavaliação semanal. Nunca quebra o atendimento."""
+    try:
+        top = skills[0] if skills else None
+        insert_interacao(
+            session_id, question,
+            top[0] if top else None,
+            float(top[3]) if top else None,
+            grounded,
+        )
+    except Exception as e:  # noqa: BLE001 — logging best-effort
+        print(f"[chat] falha ao logar interacao: {e}", flush=True)
+
+
 def ask(session_id: str, question: str, autenticado: bool = True) -> dict:
     """
     Interface pública para a API HTTP.
@@ -212,6 +229,7 @@ def ask(session_id: str, question: str, autenticado: bool = True) -> dict:
             {"role": "user", "content": question},
             {"role": "assistant", "content": answer},
         ])[-4:])
+        _log_interacao(session_id, question, [], False)
         return {"answer": answer, "sources": []}
 
     system = _system_grounded(context)
@@ -233,6 +251,7 @@ def ask(session_id: str, question: str, autenticado: bool = True) -> dict:
         {"type": "doc", "source": src, "chunk": idx, "score": round(score, 4)}
         for src, idx, _content, score in docs
     ]
+    _log_interacao(session_id, question, skills, True)
     return {"answer": answer, "sources": sources}
 
 

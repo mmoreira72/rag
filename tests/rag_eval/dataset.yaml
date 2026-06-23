@@ -52,13 +52,13 @@ retrieval_cases:
   query: como faço meu primeiro acesso?
   expected_top_1: primeiro-acesso-cadastro
   source: real
-  observed_top1_score: 0.719
+  observed_top1_score: 0.724
   observed_top1_name: primeiro-acesso-cadastro
 - id: '023'
   query: Não consigo fazer o primeiro acesso
   expected_top_1: primeiro-acesso-cadastro
   source: real
-  observed_top1_score: 0.714
+  observed_top1_score: 0.711
   observed_top1_name: primeiro-acesso-cadastro
 - id: '030'
   query: quero falar com atendente
@@ -100,7 +100,7 @@ retrieval_cases:
   query: como faço um resgate?
   expected_top_1: opcoes-resgate
   source: real
-  observed_top1_score: 0.725
+  observed_top1_score: 0.726
   observed_top1_name: opcoes-resgate
 - id: '051'
   query: quero trocar os pontos por dinheiro, como faço?
@@ -134,20 +134,20 @@ retrieval_cases:
   expected_top_1: suporte-saldo-cartao
   source: real
   notes: Cartão já resgatado e não recebido = suporte de cartão (não "como resgatar").
-  observed_top1_score: 0.679
+  observed_top1_score: 0.709
   observed_top1_name: suporte-saldo-cartao
 - id: '062'
   query: quero liberar o saldo do meu cartão pre pago
   expected_top_1: suporte-saldo-cartao
   source: real
-  observed_top1_score: 0.687
+  observed_top1_score: 0.714
   observed_top1_name: suporte-saldo-cartao
 - id: '070'
   query: Tenho um pagamento agendado para hoje, ainda está como processando aqui na
     plataforma.
   expected_top_1: pag-contas-processando
   source: real
-  observed_top1_score: 0.72
+  observed_top1_score: 0.721
   observed_top1_name: pag-contas-processando
 - id: '071'
   query: como faço para pagar uma conta com pontos?
@@ -173,7 +173,7 @@ retrieval_cases:
   expected_top_1: troca-devolucao-resgate
   source: real
   observed_top1_name: troca-devolucao-resgate
-  observed_top1_score: 0.728
+  observed_top1_score: 0.726
 - id: 081
   query: não recebi o codigo para finalizar o resgate. O que faço?
   expected_top_1: codigo-otp-resgate
@@ -218,6 +218,125 @@ retrieval_cases:
   source: drafted
   observed_top1_score: 0.73
   observed_top1_name: premio-brinde-fisico
+- id: '100'
+  query: Meu acesso foi bloqueado por erro de senha
+  expected_top_1: login-bloqueado
+  source: real
+  observed_top1_score: 0.721
+  observed_top1_name: login-bloqueado
+- id: '101'
+  query: Eu fui bloqueado no se liga
+  expected_top_1: login-bloqueado
+  source: real
+  observed_top1_score: 0.725
+  observed_top1_name: login-bloqueado
+- id: '102'
+  query: Estou sem acesso ao se liga na SKY
+  expected_top_1: esqueci-senha
+  source: real
+  notes: Participante escolheu menu "Redefinir Senha"; ambíguo com login-bloqueado.
+  observed_top1_score: 0.727
+  observed_top1_name: esqueci-senha
+- id: '103'
+  query: Gostaria de fazer o meu cadastro no se liga
+  expected_top_1: primeiro-acesso-cadastro
+  source: real
+  observed_top1_score: 0.727
+  observed_top1_name: primeiro-acesso-cadastro
+- id: '104'
+  query: Como eu faço pra acompanhar a entrega do cartão?
+  expected_top_1: prazos-resgate
+  source: real
+  observed_top1_name: prazos-resgate
+  observed_top1_score: 0.69
+- id: '105'
+  query: Resgatei pontos shell gostaria de saber prazo pra cair
+  expected_top_1: prazos-resgate
+  source: real
+  observed_top1_score: 0.71
+  observed_top1_name: prazos-resgate
+- id: '106'
+  query: Gostaria de saber como faz pra utilizar o saldo que tem no se liga pra pagar
+    conta
+  expected_top_1: pagamento-contas
+  source: real
+  observed_top1_score: 0.716
+  observed_top1_name: pagamento-contas
+- id: '107'
+  query: Tem uma conta que não foi debitado ainda referente ao mês passado
+  expected_top_1: pag-contas-processando
+  source: real
+  observed_top1_name: pag-contas-processando
+  observed_top1_score: 0.703
+- id: '108'
+  query: Troquei meus pontos por cartão presente na shopee, quando tento usar diz
+    que já foi usado, quero cancelar
+  expected_top_1: troca-devolucao-resgate
+  source: real
+  notes: Caso Shopee real (voucher já usado + cancelamento).
+  observed_top1_score: 0.707
+  observed_top1_name: troca-devolucao-resgate
+- id: '109'
+  query: gostaria que reenviasse meu cupom por favor, chegou apenas 2 dos 3 no email
+  expected_top_1: troca-devolucao-resgate
+  source: real
+  known_gap: true
+  notes: Lacuna conhecida. Cupom parcial; reranker dá só 0.567 (skill certa no topo). Aguardando mais exemplos da captura semanal antes de reforçar (evitar overfit).
+  observed_top1_name: null
+- id: '110'
+  query: O que seria o icare?
+  expected_top_1: nao-sei-icare
+  source: real
+  notes: Substitui as drafted 090/091 por tráfego real.
+  observed_top1_score: 0.725
+  observed_top1_name: nao-sei-icare
+- id: '111'
+  query: Eu recebi o cartão virtual, mas está sem saldo
+  expected_top_1: suporte-saldo-cartao
+  source: real
+  observed_top1_score: 0.722
+  observed_top1_name: suporte-saldo-cartao
+- id: '112'
+  query: Como faço para liberar o valor do cartão virtual?
+  expected_top_1: suporte-saldo-cartao
+  source: real
+  observed_top1_name: suporte-saldo-cartao
+  observed_top1_score: 0.712
+- id: '113'
+  query: Eu estou tentando desbloquear meu cartão mas tá dando erro
+  expected_top_1: suporte-saldo-cartao
+  source: real
+  observed_top1_name: suporte-saldo-cartao
+  observed_top1_score: 0.682
+- id: '114'
+  query: Resgatei um cartão físico pré pago. Preciso ativá-lo.
+  expected_top_1: suporte-saldo-cartao
+  source: real
+  notes: Ativar cartão; ambíguo com resgate-cartao-prepago.
+  observed_top1_score: 0.713
+  observed_top1_name: suporte-saldo-cartao
+- id: '115'
+  query: Pedi um cartão pré pago de 200 e está em processamento desde o dia 1
+  expected_top_1: resgate-pagamento-pendente
+  source: real
+  known_gap: true
+  notes: Lacuna conhecida. Todos os candidatos ~0.50 (fundo de ruído), ambíguo entre 4 skills. Decidir via volume da captura semanal.
+  observed_top1_name: null
+- id: '116'
+  query: fiz o resgate dos meus pontos, um já veio para usar no e-mail mas o outro
+    ainda não
+  expected_top_1: resgate-pagamento-pendente
+  source: real
+  notes: Resgate parcialmente pendente; ambíguo com prazos-resgate.
+  observed_top1_name: resgate-pagamento-pendente
+  observed_top1_score: 0.699
+- id: '117'
+  query: Quero resgatar os prêmios, ou seja, a pontuação do se liga na Sky
+  expected_top_1: opcoes-resgate
+  source: real
+  known_gap: true
+  notes: Lacuna conhecida. opcoes-resgate nem é recuperada; conversao-pontos domina (0.639). Problema de recall vetorial, decidir via captura semanal.
+  observed_top1_name: null
 - id: '900'
   query: qual a capital do Brasil?
   expected_none: true

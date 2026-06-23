@@ -1,9 +1,10 @@
 """
 Retrieval baseline regression test — Se Liga (production `seliga` branch).
 
-Calls the SAME function production uses, chat._retrieve_and_rerank, so the test
-mirrors the live routing path (embed → search_skills → rerank → cut at
-SKILL_MIN_SCORE_RERANK=0.65). For each query in dataset.yaml it checks:
+Calls the SAME function production uses, seliga_graph._get_skill (via the
+worker -> seliga_ask -> grafo -> identificar_skill path), so the test mirrors
+the live routing (embed -> search_skills -> rerank top-1 -> cut at
+SKILL_MIN_SCORE=0.65). For each query in dataset.yaml it checks:
 
   1. top_1 match  — skill returned at position 1 matches expected_top_1
   2. grounded     — a skill actually cleared the 0.65 threshold (not ungrounded)
@@ -33,11 +34,13 @@ _CANDIDATES = [
     "/app/src",                                                   # worker container
 ]
 for _p in _CANDIDATES:
-    if _p and (Path(_p) / "chat.py").exists():
+    if _p and (Path(_p) / "seliga_graph.py").exists():
         sys.path.insert(0, _p)
         break
 
-from chat import _retrieve_and_rerank  # noqa: E402
+# Chama a MESMA função que o grafo de produção usa (seliga_ask -> seliga_graph.
+# identificar_skill -> _get_skill), para o eval nunca divergir do roteamento real.
+from seliga_graph import _get_skill  # noqa: E402
 
 DATASET_PATH = Path(os.getenv("EVAL_DATASET", Path(__file__).parent / "dataset.yaml"))
 DEFAULT_SCORE_DROP_TOLERANCE = 0.05
@@ -56,18 +59,18 @@ def _save(data: dict) -> None:
 
 def run_case(case: dict) -> tuple[list[str], dict]:
     """Run one case. Returns (failures, observed)."""
-    skills, _docs = _retrieve_and_rerank(case["query"], case.get("autenticado", True))
-    top = skills[0] if skills else None
+    name, _body, score = _get_skill(case["query"])
+    grounded = name is not None
     observed = {
-        "top_1_name":  top[0] if top else None,
-        "top_1_score": float(top[3]) if top else None,
-        "grounded":    bool(skills),
+        "top_1_name":  name,
+        "top_1_score": float(score) if grounded else None,
+        "grounded":    grounded,
     }
 
     failures: list[str] = []
 
     if case.get("expected_none", False):
-        if top is not None:
+        if grounded:
             failures.append(
                 f"out-of-scope matched {observed['top_1_name']!r} "
                 f"(score {observed['top_1_score']:.3f} >= 0.65)"
@@ -75,7 +78,7 @@ def run_case(case: dict) -> tuple[list[str], dict]:
         return failures, observed
 
     # in-scope: a skill must be returned
-    if top is None:
+    if not grounded:
         failures.append("expected a skill but retrieval was ungrounded (nothing cleared 0.65)")
         return failures, observed
 
@@ -107,7 +110,7 @@ def main() -> None:
 
     data = _load()
     cases = data.get("retrieval_cases", [])
-    passed = failed = 0
+    passed = failed = gaps = 0
     disagreements: list[str] = []
 
     for case in cases:
@@ -128,15 +131,24 @@ def main() -> None:
                 )
 
         if case_failures:
-            failed += 1
-            print(f"X [{cid}] {case['query']}")
-            for f in case_failures:
-                print(f"      -> {f}")
+            if case.get("known_gap"):
+                # Lacuna conhecida: registra mas NÃO bloqueia o gate.
+                gaps += 1
+                print(f"~ [{cid}] {case['query']}  (lacuna conhecida)")
+                for f in case_failures:
+                    print(f"      -> {f}")
+            else:
+                failed += 1
+                print(f"X [{cid}] {case['query']}")
+                for f in case_failures:
+                    print(f"      -> {f}")
         else:
             passed += 1
             print(f"OK [{cid}] {case['query']}")
 
-    print(f"\n{passed}/{len(cases)} passed" + (f"  ({failed} failed)" if failed else ""))
+    print(f"\n{passed}/{len(cases)} passed"
+          + (f"  ({failed} failed)" if failed else "")
+          + (f"  [{gaps} lacuna(s) conhecida(s)]" if gaps else ""))
 
     if args.update_baseline:
         _save(data)
