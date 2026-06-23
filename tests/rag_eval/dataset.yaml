@@ -1,0 +1,242 @@
+retrieval_cases:
+- id: '001'
+  query: bom dia
+  expected_top_1: saudacoes
+  source: real
+  observed_top1_score: 0.682
+  observed_top1_name: saudacoes
+- id: '002'
+  query: Olá
+  expected_top_1: saudacoes
+  source: real
+  observed_top1_score: 0.674
+  observed_top1_name: saudacoes
+- id: '010'
+  query: meu login foi bloqueado
+  expected_top_1: login-bloqueado
+  source: real
+  observed_top1_score: 0.728
+  observed_top1_name: login-bloqueado
+- id: '011'
+  query: meu usuario esta bloqueado
+  expected_top_1: login-bloqueado
+  source: real
+  observed_top1_score: 0.723
+  observed_top1_name: login-bloqueado
+- id: '012'
+  query: esqueci minha senha, o que faço?
+  expected_top_1: esqueci-senha
+  source: real
+  notes: Historically routed to login-bloqueado — ambiguous, watch which wins.
+  observed_top1_score: 0.71
+  observed_top1_name: esqueci-senha
+- id: '013'
+  query: Esqueci a senha
+  expected_top_1: esqueci-senha
+  source: real
+  observed_top1_score: 0.727
+  observed_top1_name: esqueci-senha
+- id: '020'
+  query: quero alterar meus dados de cadastro
+  expected_top_1: atualiza-cadastro
+  source: real
+  observed_top1_score: 0.729
+  observed_top1_name: atualiza-cadastro
+- id: '021'
+  query: quero mudar meu telefone
+  expected_top_1: atualiza-cadastro
+  source: real
+  observed_top1_score: 0.688
+  observed_top1_name: atualiza-cadastro
+- id: '022'
+  query: como faço meu primeiro acesso?
+  expected_top_1: primeiro-acesso-cadastro
+  source: real
+  observed_top1_score: 0.719
+  observed_top1_name: primeiro-acesso-cadastro
+- id: '023'
+  query: Não consigo fazer o primeiro acesso
+  expected_top_1: primeiro-acesso-cadastro
+  source: real
+  observed_top1_score: 0.714
+  observed_top1_name: primeiro-acesso-cadastro
+- id: '030'
+  query: quero falar com atendente
+  expected_top_1: falar-com-atendente
+  source: real
+  observed_top1_score: 0.73
+  observed_top1_name: falar-com-atendente
+- id: '031'
+  query: me direcione para o sac
+  expected_top_1: falar-com-atendente
+  source: real
+  observed_top1_score: 0.724
+  observed_top1_name: falar-com-atendente
+- id: '040'
+  query: não recebi meus pontos
+  expected_top_1: pontos-nao-creditados
+  source: real
+  observed_top1_score: 0.696
+  observed_top1_name: pontos-nao-creditados
+- id: '041'
+  query: Porque meus pontos não caíram ?
+  expected_top_1: pontos-nao-creditados
+  source: real
+  observed_top1_score: 0.707
+  observed_top1_name: pontos-nao-creditados
+- id: '042'
+  query: quantos pontos eu tenho?
+  expected_top_1: saldo-pontos
+  source: real
+  observed_top1_score: 0.717
+  observed_top1_name: saldo-pontos
+- id: '043'
+  query: onde vejo meus pontos
+  expected_top_1: saldo-pontos
+  source: real
+  observed_top1_score: 0.72
+  observed_top1_name: saldo-pontos
+- id: '050'
+  query: como faço um resgate?
+  expected_top_1: opcoes-resgate
+  source: real
+  observed_top1_score: 0.725
+  observed_top1_name: opcoes-resgate
+- id: '051'
+  query: quero trocar os pontos por dinheiro, como faço?
+  expected_top_1: opcoes-resgate
+  source: real
+  observed_top1_score: 0.726
+  observed_top1_name: opcoes-resgate
+- id: '052'
+  query: qual prazo de entrega do meu resgate?
+  expected_top_1: prazos-resgate
+  source: real
+  observed_top1_score: 0.73
+  observed_top1_name: prazos-resgate
+- id: '053'
+  query: NAO CONSIGO CONCLUIR O RESGATE DOS PONTOS
+  expected_top_1: codigo-otp-resgate
+  source: real
+  notes: Accepted current routing; "não consigo concluir o resgate" is a fair OTP
+    match.
+  observed_top1_score: 0.723
+  observed_top1_name: codigo-otp-resgate
+- id: '060'
+  query: quero resgatar um cartão pre-pago. Como faço?
+  expected_top_1: resgate-cartao-prepago
+  source: real
+  notes: Historical label resgate-cartao-virtual (skill renamed).
+  observed_top1_score: 0.731
+  observed_top1_name: resgate-cartao-prepago
+- id: '061'
+  query: não recebi meu cartão virtual?
+  expected_top_1: suporte-saldo-cartao
+  source: real
+  notes: Cartão já resgatado e não recebido = suporte de cartão (não "como resgatar").
+  observed_top1_score: 0.679
+  observed_top1_name: suporte-saldo-cartao
+- id: '062'
+  query: quero liberar o saldo do meu cartão pre pago
+  expected_top_1: suporte-saldo-cartao
+  source: real
+  observed_top1_score: 0.687
+  observed_top1_name: suporte-saldo-cartao
+- id: '070'
+  query: Tenho um pagamento agendado para hoje, ainda está como processando aqui na
+    plataforma.
+  expected_top_1: pag-contas-processando
+  source: real
+  observed_top1_score: 0.72
+  observed_top1_name: pag-contas-processando
+- id: '071'
+  query: como faço para pagar uma conta com pontos?
+  expected_top_1: pagamento-contas
+  source: real
+  notes: 'Overlap cluster: pagamento-contas vs pag-contas-processando vs antecipar/agendar-boleto.'
+  observed_top1_score: 0.729
+  observed_top1_name: pagamento-contas
+- id: '072'
+  query: como posso antecipar meus boletos?
+  expected_top_1: antecipar-boleto
+  source: real
+  observed_top1_score: 0.728
+  observed_top1_name: antecipar-boleto
+- id: '073'
+  query: Gostaria de agendar uma conta para ser paga amanhã. É possível?
+  expected_top_1: agendar-boleto
+  source: real
+  observed_top1_score: 0.672
+  observed_top1_name: agendar-boleto
+- id: 080
+  query: porque meu pedido foi cancelado?
+  expected_top_1: troca-devolucao-resgate
+  source: real
+  observed_top1_name: troca-devolucao-resgate
+  observed_top1_score: 0.728
+- id: 081
+  query: não recebi o codigo para finalizar o resgate. O que faço?
+  expected_top_1: codigo-otp-resgate
+  source: real
+  notes: NEW skill. History routed this to troca-devolucao-resgate (OTP skill didn't
+    exist). Verifies the new skill now wins.
+  observed_top1_score: 0.731
+  observed_top1_name: codigo-otp-resgate
+- id: 090
+  query: o que é icare?
+  expected_top_1: nao-sei-icare
+  source: drafted
+  observed_top1_score: 0.73
+  observed_top1_name: nao-sei-icare
+- id: 091
+  query: não sei qual é o meu código icare
+  expected_top_1: nao-sei-icare
+  source: drafted
+  observed_top1_score: 0.729
+  observed_top1_name: nao-sei-icare
+- id: 092
+  query: quantos pontos preciso para resgatar um produto de R$ 100?
+  expected_top_1: conversao-pontos
+  source: drafted
+  observed_top1_score: 0.73
+  observed_top1_name: conversao-pontos
+- id: 093
+  query: R$ 50 dá quantos pontos?
+  expected_top_1: conversao-pontos
+  source: drafted
+  observed_top1_name: conversao-pontos
+  observed_top1_score: 0.729
+- id: 094
+  query: ganhei um brinde na campanha e ainda não recebi
+  expected_top_1: premio-brinde-fisico
+  source: drafted
+  observed_top1_score: 0.73
+  observed_top1_name: premio-brinde-fisico
+- id: 095
+  query: qual o prazo de entrega do meu prêmio físico?
+  expected_top_1: premio-brinde-fisico
+  source: drafted
+  observed_top1_score: 0.73
+  observed_top1_name: premio-brinde-fisico
+- id: '900'
+  query: qual a capital do Brasil?
+  expected_none: true
+  source: drafted
+  observed_top1_name: null
+- id: '901'
+  query: quero assinar o pacote de TV e internet da SKY
+  expected_none: true
+  source: drafted
+  notes: Telecom-confusion trap — Se Liga is an incentive program, not the SKY telecom
+    service.
+  observed_top1_name: null
+- id: '902'
+  query: me conta uma piada
+  expected_none: true
+  source: drafted
+  observed_top1_name: null
+- id: '903'
+  query: qual a previsão do tempo para amanhã?
+  expected_none: true
+  source: drafted
+  observed_top1_name: null

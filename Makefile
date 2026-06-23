@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy
+.PHONY: help up down logs ps psql reset-db install ingest ingest-skills reindex chat debug mcp-serve clean convert-user reconvert-user ingest-user api api-build api-logs api-down worker-logs worker-down ollama-pull up-server up-gpu deploy eval eval-update
 
 # usamos caminho absoluto porque vários targets fazem `cd src` antes de chamar $(PY)
 # aspas em volta do $(REQS) pra sobreviver a espaços no path (ex.: "Application Support")
@@ -91,6 +91,22 @@ ingest-skills:
 
 reindex: reingest ingest-skills
 
+# ---------- eval de retrieval (gate pós-reindex) ----------
+# Roda o baseline de retrieval DENTRO do worker (tem modelos BGE + pgvector).
+# Sai != 0 se o roteamento desviar do baseline em tests/rag_eval/dataset.yaml.
+eval:
+	docker cp tests/rag_eval local-rag-worker:/app/eval_run
+	docker exec -w /app/src -e EVAL_DATASET=/app/eval_run/dataset.yaml \
+		local-rag-worker python /app/eval_run/run_baseline.py
+
+# Re-snapshot do baseline (observed_*) após mudança intencional nas skills.
+# Copia o dataset.yaml atualizado de volta para o repo — revise o diff antes de commitar.
+eval-update:
+	docker cp tests/rag_eval local-rag-worker:/app/eval_run
+	docker exec -w /app/src -e EVAL_DATASET=/app/eval_run/dataset.yaml \
+		local-rag-worker python /app/eval_run/run_baseline.py --update-baseline
+	docker cp local-rag-worker:/app/eval_run/dataset.yaml tests/rag_eval/dataset.yaml
+
 # converte docs do usuário (data/user/*.pdf,docx,xlsx,etc) para markdown via docling
 convert-user:
 	cd src && $(PY) convert_user_docs.py
@@ -165,6 +181,7 @@ deploy:
 	@echo "Aguardando worker subir..."
 	@sleep 10
 	docker exec local-rag-worker python ingest_skills.py
+	$(MAKE) eval
 	docker exec local-rag-worker python convert_user_docs.py
 	docker exec local-rag-worker python ingest.py
 	docker exec local-rag-db psql -U rag -c "DELETE FROM sessions;"
