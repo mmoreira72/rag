@@ -337,6 +337,21 @@ retrieval_cases:
   known_gap: true
   notes: Lacuna conhecida. opcoes-resgate nem é recuperada; conversao-pontos domina (0.639). Problema de recall vetorial, decidir via captura semanal.
   observed_top1_name: null
+# ---- reforços do dia 1 da captura (2026-06-23) ----
+- id: '120'
+  query: onde vejo os pontos que ganho
+  expected_top_1: saldo-pontos
+  source: real
+- id: '121'
+  query: qual prazo de entrega do meu voucher físico?
+  expected_top_1: prazos-resgate
+  source: real
+  notes: Voucher/cartão físico = até 12 dias úteis; reforçado p/ vencer premio-brinde-fisico.
+- id: '122'
+  query: onde atualizo meu cadastro?
+  expected_top_1: atualiza-cadastro
+  source: real
+  notes: Passa isolada (0.72); recusa de 23/06 foi por query augmentation (follow-up).
 - id: '900'
   query: qual a capital do Brasil?
   expected_none: true

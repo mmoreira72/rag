@@ -90,17 +90,22 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
     else:
         sources = (result or {}).get("docs_sources", [])
 
-    # Log da interação (só perguntas novas) para reavaliação semanal do retrieval.
+    # Log da interação (só perguntas novas) para reavaliação semanal.
+    # grounded considera AMBOS os caminhos do grafo: skill OU documento (FAQ).
     # Best-effort: nunca quebra o atendimento.
     if is_new:
         try:
             from db import insert_interacao
-            insert_interacao(
-                session_id, message,
-                skill_name or None,
-                float(skill_score) if skill_name else None,
-                bool(skill_name),
-            )
+            docs = (result or {}).get("docs_sources") or []
+            if skill_name:
+                top1, sc, grounded = skill_name, float(skill_score), True
+            elif docs:
+                top1 = f"doc:{docs[0].get('source', '')}"
+                sc = float(docs[0].get("score") or 0.0)
+                grounded = True
+            else:
+                top1, sc, grounded = None, None, False
+            insert_interacao(session_id, message, top1, sc, grounded)
         except Exception as e:  # noqa: BLE001
             print(f"[seliga_ask] falha ao logar interacao: {e}", flush=True)
 
