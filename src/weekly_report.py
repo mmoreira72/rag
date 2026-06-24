@@ -50,18 +50,23 @@ def main() -> None:
         print(f"  Recusadas:   {rec_atual} ({pct(rec_atual, atual)})  "
               f"(anterior: {rec_anterior}, {pct(rec_anterior, anterior)})\n")
 
-        # --- 1. perguntas recusadas (lacunas) ---
-        recusadas = q(cur, """
-            SELECT query, count(*) n
-            FROM interacoes
-            WHERE NOT grounded AND created_at >= now() - make_interval(days => %s)
-            GROUP BY query ORDER BY n DESC, query LIMIT 40
-        """, (DAYS,))
-        print(f"# 1. Perguntas RECUSADAS — {len(recusadas)} formulações distintas "
-              f"(lacunas de cobertura)")
-        for query, n in recusadas:
-            print(f"  {n:>3}x  {query[:110]}")
-        print()
+        # --- 1. perguntas recusadas, separadas por autenticado ---
+        # LOGADOS = lacunas reais (tinha acesso e mesmo assim não achou skill/doc).
+        # NÃO-LOGADOS = pode ser esperado (pediu algo que exige login).
+        for rotulo, cond in [
+            ("LOGADOS (lacunas reais)", "autenticado IS TRUE"),
+            ("NÃO-LOGADOS (pode exigir login)", "autenticado IS NOT TRUE"),
+        ]:
+            rec = q(cur, f"""
+                SELECT query, count(*) n FROM interacoes
+                WHERE NOT grounded AND {cond}
+                  AND created_at >= now() - make_interval(days => %s)
+                GROUP BY query ORDER BY n DESC, query LIMIT 30
+            """, (DAYS,))
+            print(f"# 1. RECUSADAS — {rotulo}: {len(rec)} formulações")
+            for query, n in rec:
+                print(f"  {n:>3}x  {query[:110]}")
+            print()
 
         # --- 3. distribuição por skill ---
         dist = q(cur, """

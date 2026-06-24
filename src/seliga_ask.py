@@ -105,7 +105,7 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
                 grounded = True
             else:
                 top1, sc, grounded = None, None, False
-            insert_interacao(session_id, message, top1, sc, grounded)
+            insert_interacao(session_id, message, top1, sc, grounded, autenticado)
         except Exception as e:  # noqa: BLE001
             print(f"[seliga_ask] falha ao logar interacao: {e}", flush=True)
 

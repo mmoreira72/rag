@@ -155,16 +155,17 @@ def insert_escalada(numero_atendimento: str, skill_name: str, icare: str | None,
 
 
 def insert_interacao(session_id: str, query: str, skill_top1: str | None,
-                     score: float | None, grounded: bool) -> None:
+                     score: float | None, grounded: bool,
+                     autenticado: bool | None = None) -> None:
     """Loga uma interação para reavaliação semanal do desempenho (append-only).
     Resiliente: nunca deve quebrar o atendimento se a gravação falhar."""
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO interacoes (session_id, query, skill_top1, score, grounded)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO interacoes (session_id, query, skill_top1, score, grounded, autenticado)
+            VALUES (%s, %s, %s, %s, %s, %s)
             """,
-            (session_id, query, skill_top1, score, grounded),
+            (session_id, query, skill_top1, score, grounded, autenticado),
         )
         conn.commit()
 
