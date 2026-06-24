@@ -63,10 +63,23 @@ def _IDENTIDADE() -> str:
     )
 
 MENSAGEM_ENCAMINHAMENTO = (
-    "Para te ajudar com esse assunto, preciso de algumas informações que só o nosso "
-    "time de atendimento consegue acessar com segurança. Por isso vou encaminhar o "
-    "que conversamos para o SAC, para que possamos te atender da melhor forma possível. Posso te ajudar em mais alguma coisa?"
+    "Essa solicitação envolve informações específicas da sua conta, que não estão "
+    "disponíveis para minha consulta. Para receber o suporte adequado, entre em contato com o SAC."
 )
+
+# Mensagem quando nenhuma skill/doc cobre a pergunta — varia por área (a pedido do Se Liga).
+def _fallback_sem_cobertura(autenticado: bool) -> str:
+    if not autenticado:
+        # Área deslogada: assunto fora do que é atendido sem login.
+        return (
+            "Para consultar esse tipo de informação, é necessário acessar a plataforma "
+            "com seu login. Posso ajudar com dúvidas sobre cadastro, acesso ou recuperação de senha?"
+        )
+    # Área logada: assunto não encontrado na base.
+    return (
+        "Não consegui identificar exatamente a informação que você procura. "
+        "Poderia fornecer mais detalhes para que eu possa ajudar?"
+    )
 
 
 def _campos_da_skill(skill_body: str) -> list[str]:
@@ -191,10 +204,7 @@ def identificar_skill(state: SeligaState) -> dict:
             "skill_name": "",
             "skill_body": "",
             "skill_score": round(score, 4),
-            "resposta_final": (
-                "Não consegui identificar o assunto da sua solicitação. "
-                "Pode descrever melhor o que está acontecendo?"
-            ),
+            "resposta_final": _fallback_sem_cobertura(state.get("autenticado")),
             "rota": "escalar",
         }
     return {"skill_name": name, "skill_body": body, "skill_score": round(score, 4)}
@@ -355,10 +365,7 @@ def buscar_documentos(state: SeligaState) -> dict:
     if not raw:
         return {
             "docs_contexto": "",
-            "resposta_final": (
-                "Não encontrei informações sobre esse assunto na minha base de conhecimento. "
-                "Pode descrever melhor o que está acontecendo?"
-            ),
+            "resposta_final": _fallback_sem_cobertura(state.get("autenticado")),
         }
 
     if USE_RERANKER:
@@ -370,10 +377,7 @@ def buscar_documentos(state: SeligaState) -> dict:
     if not docs:
         return {
             "docs_contexto": "",
-            "resposta_final": (
-                "Não encontrei informações sobre esse assunto na minha base de conhecimento. "
-                "Pode descrever melhor o que está acontecendo?"
-            ),
+            "resposta_final": _fallback_sem_cobertura(state.get("autenticado")),
         }
     contexto = "\n\n".join(
         f"--- {src} (score {score:.2f}) ---\n{content}"
