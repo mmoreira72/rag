@@ -374,3 +374,42 @@ retrieval_cases:
   expected_none: true
   source: drafted
   observed_top1_name: null
+# ── Casos de DOCUMENTO (kind: doc) — caminho de fallback _get_doc, corte 0.55.
+#    expected_top_1 é um TRECHO do source. Cobrem respostas informativas (FAQ)
+#    que o gate de skill não protege.
+- id: D01
+  kind: doc
+  query: quais desafios estão disponíveis para fazer?
+  expected_top_1: missoes-desafios
+  source: real
+  notes: Era recusa a 0.549; doc Missões/Desafios adicionado para firmar retrieval.
+  observed_top1_score: 0.727
+  observed_top1_name: missoes-desafios.md
+- id: D02
+  kind: doc
+  query: que missões tem disponível?
+  expected_top_1: missoes-desafios
+  source: drafted
+  observed_top1_score: 0.726
+  observed_top1_name: missoes-desafios.md
+- id: D03
+  kind: doc
+  query: o que é o dashboard?
+  expected_top_1: Dashboard
+  source: drafted
+  observed_top1_score: 0.73
+  observed_top1_name: SAC - SE LIGA NA SKY - Dashboard.txt
+- id: D04
+  kind: doc
+  query: onde vejo meu dashboard?
+  expected_top_1: Dashboard
+  source: drafted
+  observed_top1_score: 0.718
+  observed_top1_name: SAC - SE LIGA NA SKY - Dashboard.txt
+- id: D05
+  kind: doc
+  query: o que são os conectados?
+  expected_top_1: Conectados
+  source: drafted
+  observed_top1_score: 0.727
+  observed_top1_name: SAC - SE LIGA NA SKY - Conectados.txt

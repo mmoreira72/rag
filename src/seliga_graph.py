@@ -182,6 +182,34 @@ def _get_skill(query: str) -> tuple[str, str, float] | tuple[None, None, float]:
     return raw[0][0], raw[0][2], score
 
 
+DOC_MIN_SCORE = 0.55  # threshold pós-reranker do fallback de documentos
+
+
+def _get_doc(query: str) -> tuple[str, str, float] | tuple[None, None, float]:
+    """Devolve (source, content, score) do doc mais relevante ou (None, None, score).
+
+    Espelha o retrieval de `buscar_documentos` (caminho AUTENTICADO, sem o filtro
+    de área pública), para o eval cobrir o caminho de doc sem divergir da produção.
+    """
+    qvec = embed([query])[0]
+    raw = search_documents(qvec, TOP_K_RETRIEVE_DOCS)
+    if not raw:
+        return None, None, 0.0
+    if USE_RERANKER:
+        texts = [f"{src}\n{content}" for src, _idx, content, _score in raw]
+        ranked = rerank(query, texts, top_k=TOP_K_DOCS)
+        if not ranked:
+            return None, None, 0.0
+        orig_idx, rscore = ranked[0]
+        if rscore < DOC_MIN_SCORE:
+            return None, None, rscore
+        return raw[orig_idx][0], raw[orig_idx][2], rscore
+    top = raw[0]
+    if top[3] < DOC_MIN_SCORE:
+        return None, None, top[3]
+    return top[0], top[2], top[3]
+
+
 def _call_llm(system: str, user: str) -> str:
     resp = llm.invoke([
         {"role": "system", "content": system},

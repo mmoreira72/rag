@@ -1,10 +1,14 @@
 """
 Retrieval baseline regression test — Se Liga (production `seliga` branch).
 
-Calls the SAME function production uses, seliga_graph._get_skill (via the
-worker -> seliga_ask -> grafo -> identificar_skill path), so the test mirrors
-the live routing (embed -> search_skills -> rerank top-1 -> cut at
-SKILL_MIN_SCORE=0.65). For each query in dataset.yaml it checks:
+Calls the SAME functions production uses:
+  - skill path (default): seliga_graph._get_skill — embed -> search_skills ->
+    rerank top-1 -> cut at SKILL_MIN_SCORE=0.65
+  - doc path (`kind: doc`): seliga_graph._get_doc — mirrors buscar_documentos
+    (embed -> search_documents -> rerank top -> cut at DOC_MIN_SCORE=0.55,
+    authenticated path). For doc cases expected_top_1 is a SOURCE SUBSTRING.
+
+For each query in dataset.yaml it checks:
 
   1. top_1 match  — skill returned at position 1 matches expected_top_1
   2. grounded     — a skill actually cleared the 0.65 threshold (not ungrounded)
@@ -40,7 +44,7 @@ for _p in _CANDIDATES:
 
 # Chama a MESMA função que o grafo de produção usa (seliga_ask -> seliga_graph.
 # identificar_skill -> _get_skill), para o eval nunca divergir do roteamento real.
-from seliga_graph import _get_skill  # noqa: E402
+from seliga_graph import _get_skill, _get_doc  # noqa: E402
 
 DATASET_PATH = Path(os.getenv("EVAL_DATASET", Path(__file__).parent / "dataset.yaml"))
 DEFAULT_SCORE_DROP_TOLERANCE = 0.05
@@ -58,8 +62,14 @@ def _save(data: dict) -> None:
 
 
 def run_case(case: dict) -> tuple[list[str], dict]:
-    """Run one case. Returns (failures, observed)."""
-    name, _body, score = _get_skill(case["query"])
+    """Run one case. Returns (failures, observed).
+
+    `kind: doc` roda o caminho de documentos (_get_doc, corte 0.55); qualquer
+    outro valor (default `skill`) roda o caminho de skill (_get_skill, corte 0.65).
+    """
+    is_doc = case.get("kind") == "doc"
+    cut = 0.55 if is_doc else 0.65
+    name, _body, score = (_get_doc if is_doc else _get_skill)(case["query"])
     grounded = name is not None
     observed = {
         "top_1_name":  name,
@@ -73,20 +83,30 @@ def run_case(case: dict) -> tuple[list[str], dict]:
         if grounded:
             failures.append(
                 f"out-of-scope matched {observed['top_1_name']!r} "
-                f"(score {observed['top_1_score']:.3f} >= 0.65)"
+                f"(score {observed['top_1_score']:.3f} >= {cut})"
             )
         return failures, observed
 
-    # in-scope: a skill must be returned
+    # in-scope: um skill/doc tem de ser retornado
     if not grounded:
-        failures.append("expected a skill but retrieval was ungrounded (nothing cleared 0.65)")
+        kind = "doc" if is_doc else "skill"
+        failures.append(f"expected a {kind} but retrieval was ungrounded (nothing cleared {cut})")
         return failures, observed
 
+    # Para doc, expected_top_1 é um trecho do source (ex: 'missoes-desafios');
+    # para skill, é o nome exato da skill.
     expected_top_1 = case.get("expected_top_1")
-    if expected_top_1 and observed["top_1_name"] != expected_top_1:
-        failures.append(
-            f"top_1 mismatch: expected {expected_top_1!r}, got {observed['top_1_name']!r}"
-        )
+    if expected_top_1:
+        if is_doc:
+            if expected_top_1.lower() not in (observed["top_1_name"] or "").lower():
+                failures.append(
+                    f"top_1 doc mismatch: expected source containing {expected_top_1!r}, "
+                    f"got {observed['top_1_name']!r}"
+                )
+        elif observed["top_1_name"] != expected_top_1:
+            failures.append(
+                f"top_1 mismatch: expected {expected_top_1!r}, got {observed['top_1_name']!r}"
+            )
 
     baseline = case.get("observed_top1_score")
     actual = observed["top_1_score"]
@@ -123,7 +143,10 @@ def main() -> None:
             case["observed_top1_name"] = observed["top_1_name"]
             # Flag where current routing disagrees with the intended label (review, not block)
             exp = case.get("expected_top_1")
-            if exp and not case.get("expected_none") and observed["top_1_name"] != exp:
+            got = observed["top_1_name"] or ""
+            mismatch = (exp.lower() not in got.lower()) if case.get("kind") == "doc" \
+                else (observed["top_1_name"] != exp)
+            if exp and not case.get("expected_none") and mismatch:
                 disagreements.append(
                     f"  [{cid}] {case['query']!r}\n"
                     f"        intended {exp!r} but index routes to "
