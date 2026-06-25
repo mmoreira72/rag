@@ -374,6 +374,19 @@ retrieval_cases:
   expected_none: true
   source: drafted
   observed_top1_name: null
+- id: '023'
+  query: Meu cpf não foi encontrado no cadastro, o que devo fazer?
+  expected_top_1: primeiro-acesso-cadastro
+  source: real
+  notes: Era recusa a 0.643 (near-miss); description reforçada com "CPF não encontrado".
+  observed_top1_score: 0.727
+  observed_top1_name: primeiro-acesso-cadastro
+- id: '024'
+  query: meu CPF não está cadastrado
+  expected_top_1: primeiro-acesso-cadastro
+  source: drafted
+  observed_top1_score: 0.728
+  observed_top1_name: primeiro-acesso-cadastro
 # ── Casos de DOCUMENTO (kind: doc) — caminho de fallback _get_doc, corte 0.55.
 #    expected_top_1 é um TRECHO do source. Cobrem respostas informativas (FAQ)
 #    que o gate de skill não protege.
