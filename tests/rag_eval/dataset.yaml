@@ -387,6 +387,19 @@ retrieval_cases:
   source: drafted
   observed_top1_score: 0.728
   observed_top1_name: primeiro-acesso-cadastro
+- id: '060'
+  query: Quando sobe os pontos
+  expected_top_1: pontos-nao-creditados
+  source: real
+  notes: Gíria "sobe os pontos" era recusa a 0.522; description reforçada com sobe/subir.
+  observed_top1_score: 0.72
+  observed_top1_name: pontos-nao-creditados
+- id: '061'
+  query: quando vai subir os pontos da campanha
+  expected_top_1: pontos-nao-creditados
+  source: drafted
+  observed_top1_score: 0.723
+  observed_top1_name: pontos-nao-creditados
 # ── Casos de DOCUMENTO (kind: doc) — caminho de fallback _get_doc, corte 0.55.
 #    expected_top_1 é um TRECHO do source. Cobrem respostas informativas (FAQ)
 #    que o gate de skill não protege.
