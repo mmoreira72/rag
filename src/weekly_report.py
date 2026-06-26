@@ -18,6 +18,13 @@ from config import PG_DSN
 
 DAYS = int(os.getenv("DAYS", "7"))
 
+# Auditoria de segurança: padrões de ENUMERAÇÃO / extração de dados de terceiros
+# ou do sistema (listas, CNPJ/CPF alheios, dumps). Excluímos auto-referência
+# (meu/minha/ganhei/recebi) p/ não poluir com consultas de dados próprios.
+AUDIT_SENSIVEL = (r"lista|listar|relação|relacao|planilha|exportar|\mdump\m|"
+                  r"base de dados|beneficiári|cnpj|\mcpf\m|todos os|todas as")
+AUDIT_AUTOREF = r"\m(meu|meus|minha|minhas|eu|ganhei|ganho|tenho|recebi|tive)\M"
+
 
 def q(cur, sql, params=()):
     cur.execute(sql, params)
@@ -49,6 +56,34 @@ def main() -> None:
         print(f"  Interações:  {atual}  (semana anterior: {anterior})")
         print(f"  Recusadas:   {rec_atual} ({pct(rec_atual, atual)})  "
               f"(anterior: {rec_anterior}, {pct(rec_anterior, anterior)})\n")
+
+        # --- AUDITORIA DE SEGURANÇA: pedidos de enumeração / extração ---
+        # grounded=t aqui é o caso a investigar (o LLM chegou a responder).
+        audit = q(cur, """
+            SELECT query, grounded, autenticado, count(*) n,
+                   max(created_at)::date ultima,
+                   (array_agg(resposta ORDER BY created_at DESC)
+                      FILTER (WHERE resposta IS NOT NULL))[1] AS amostra_resp
+            FROM interacoes
+            WHERE created_at >= now() - make_interval(days => %s)
+              AND query ~* %s AND query !~* %s
+            GROUP BY query, grounded, autenticado
+            ORDER BY grounded DESC, n DESC, ultima DESC
+        """, (DAYS, AUDIT_SENSIVEL, AUDIT_AUTOREF))
+        print("# 0. AUDITORIA DE SEGURANÇA — pedidos sensíveis / enumeração")
+        if not audit:
+            print("  (nenhum pedido suspeito na janela)\n")
+        else:
+            respondidos = sum(1 for r in audit if r[1])
+            print(f"  {len(audit)} formulação(ões) suspeita(s); "
+                  f"⚠ {respondidos} RESPONDIDA(S) pelo LLM (grounded=t)")
+            for query, grounded, auth, n, ultima, resp in audit:
+                flag = "⚠ RESPONDIDA" if grounded else "recusada"
+                au = "logado" if auth else "deslogado"
+                print(f"  [{flag}] {n}x ({au}, últ {ultima})  {query[:90]}")
+                if grounded and resp:
+                    print(f"        ↳ resp: {resp[:160]}")
+            print()
 
         # --- 1. perguntas recusadas, separadas por autenticado ---
         # LOGADOS = lacunas reais (tinha acesso e mesmo assim não achou skill/doc).

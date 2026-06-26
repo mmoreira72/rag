@@ -105,7 +105,10 @@ def ask(session_id: str, message: str, autenticado: bool = True) -> dict:
                 grounded = True
             else:
                 top1, sc, grounded = None, None, False
-            insert_interacao(session_id, message, top1, sc, grounded, autenticado)
+            # Auditoria: guarda o texto gerado só quando grounded (LLM respondeu).
+            # Recusa determinística não chama o LLM → resposta fica NULL.
+            resposta = answer if grounded else None
+            insert_interacao(session_id, message, top1, sc, grounded, autenticado, resposta)
         except Exception as e:  # noqa: BLE001
             print(f"[seliga_ask] falha ao logar interacao: {e}", flush=True)
 

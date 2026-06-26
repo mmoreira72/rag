@@ -156,16 +156,19 @@ def insert_escalada(numero_atendimento: str, skill_name: str, icare: str | None,
 
 def insert_interacao(session_id: str, query: str, skill_top1: str | None,
                      score: float | None, grounded: bool,
-                     autenticado: bool | None = None) -> None:
+                     autenticado: bool | None = None,
+                     resposta: str | None = None) -> None:
     """Loga uma interação para reavaliação semanal do desempenho (append-only).
+    `resposta` é o texto gerado pelo LLM (só preenchido quando grounded=True) para
+    auditoria de segurança; recusas determinísticas ficam NULL.
     Resiliente: nunca deve quebrar o atendimento se a gravação falhar."""
     with connect() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO interacoes (session_id, query, skill_top1, score, grounded, autenticado)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO interacoes (session_id, query, skill_top1, score, grounded, autenticado, resposta)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             """,
-            (session_id, query, skill_top1, score, grounded, autenticado),
+            (session_id, query, skill_top1, score, grounded, autenticado, resposta),
         )
         conn.commit()
 

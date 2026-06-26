@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS interacoes (
     score       REAL,
     grounded    BOOLEAN     NOT NULL,
     autenticado BOOLEAN,
+    resposta    TEXT,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
