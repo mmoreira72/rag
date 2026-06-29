@@ -15,13 +15,18 @@ Sinais:
     SIGTERM / SIGINT — encerra o loop após o job corrente terminar (graceful shutdown).
 """
 import json
+import os
 import signal
 import sys
 from datetime import datetime, timezone
 
-from seliga_ask import ask
 from job_queue import dequeue, get_job, update_job
-from llm_client import warmup_llm_models
+
+if os.getenv("USE_CONTEXT_STUFFING") == "1":
+    from context_ask import ask, warmup as warmup_fn
+else:
+    from seliga_ask import ask  # type: ignore[assignment]
+    from llm_client import warmup_llm_models as warmup_fn  # type: ignore[assignment]
 
 
 def process(job_id: str) -> None:
@@ -57,7 +62,7 @@ def process(job_id: str) -> None:
 
 
 def main() -> None:
-    warmup_llm_models()
+    warmup_fn()
     print("[worker] iniciando — aguardando jobs...", flush=True)
     running = True
 
